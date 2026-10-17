@@ -180,14 +180,7 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
               String fieldName = prefix + name;
               String sourceName = sourcePrefix + name;
               String type = String.valueOf(mapping.getOrDefault("type", "object"));
-              Field field =
-                  new Field(
-                      fieldName,
-                      sourceName,
-                      type,
-                      java.util.Collections.disjoint(
-                          mapping.keySet(),
-                          Set.of("normalizer", "null_value", "ignore_above", "ignore_malformed")));
+              Field field = new Field(fieldName, sourceName, type, mappingAllowsPushdown(mapping));
               fields.merge(fieldName, field, Field::merge);
               sources
                   .computeIfAbsent(fieldName, key -> new LinkedHashMap<>())
@@ -209,13 +202,7 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
                                 fieldName + "." + subName,
                                 sourceName,
                                 String.valueOf(object(subValue).get("type")),
-                                java.util.Collections.disjoint(
-                                    object(subValue).keySet(),
-                                    Set.of(
-                                        "normalizer",
-                                        "null_value",
-                                        "ignore_above",
-                                        "ignore_malformed")));
+                                mappingAllowsPushdown(object(subValue)));
                         fields.merge(sub.name(), sub, Field::merge);
                         sources
                             .computeIfAbsent(sub.name(), key -> new LinkedHashMap<>())
@@ -224,13 +211,22 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
             });
   }
 
+  private static boolean mappingAllowsPushdown(Map<String, Object> mapping) {
+    // Local evaluation reads _source, while native queries and aggregations require indexed
+    // values or doc values. Retain a conservative shared eligibility flag for both paths.
+    return !Boolean.FALSE.equals(mapping.get("index"))
+        && !Boolean.FALSE.equals(mapping.get("doc_values"))
+        && java.util.Collections.disjoint(
+            mapping.keySet(),
+            Set.of("normalizer", "null_value", "ignore_above", "ignore_malformed"));
+  }
+
   Map<String, Object> request(String method, String endpoint, Map<String, Object> body) {
     try {
       Request request = new Request(method, endpoint);
       if (body != null) request.setJsonEntity(mapper.writeValueAsString(body));
       String json = EntityUtils.toString(client.performRequest(request).getEntity());
-      return mapper.readValue(json, new TypeReference<>() {
-      });
+      return mapper.readValue(json, new TypeReference<>() {});
     } catch (IOException e) {
       throw new BackendException("Elasticsearch request failed: " + method + " " + endpoint, e);
     }

@@ -42,17 +42,19 @@ import org.apache.calcite.rel.core.AggregateCall;
 import org.apache.calcite.rel.core.Filter;
 import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.core.Sort;
+import org.apache.calcite.rel.core.TableScan;
 import org.apache.calcite.rel.metadata.RelMetadataQuery;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexLiteral;
+import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.type.SqlTypeName;
+import org.opensearch.sql.calcite.plan.HighlightPushDown;
 import org.opensearch.sql.elasticsearch.ElasticsearchQueryBackend.ElasticsearchTable;
 import org.opensearch.sql.elasticsearch.ElasticsearchQueryBackend.Field;
 
 /** Immutable search plan. Every Enumerator owns its pagination state and remote context. */
-public final class ElasticsearchScan extends org.apache.calcite.rel.core.TableScan
-    implements EnumerableRel, org.opensearch.sql.calcite.plan.HighlightPushDown {
+public final class ElasticsearchScan extends TableScan implements EnumerableRel, HighlightPushDown {
   private final RelOptTable table;
   private final ElasticsearchTable source;
   private final List<Field> fields;
@@ -60,8 +62,8 @@ public final class ElasticsearchScan extends org.apache.calcite.rel.core.TableSc
   private final List<Object> sort;
   private final long offset;
   private final Long fetch;
-  private final List<Field> groups;
-  private final List<AggregateCall> aggregates;
+  private final List<ElasticsearchGrouping> groups;
+  private final List<ElasticsearchMetric> aggregates;
   private final org.opensearch.sql.ast.tree.HighlightConfig highlight;
 
   private ElasticsearchScan(
@@ -75,8 +77,8 @@ public final class ElasticsearchScan extends org.apache.calcite.rel.core.TableSc
       List<Object> sort,
       long offset,
       Long fetch,
-      List<Field> groups,
-      List<AggregateCall> aggregates,
+      List<ElasticsearchGrouping> groups,
+      List<ElasticsearchMetric> aggregates,
       org.opensearch.sql.ast.tree.HighlightConfig highlight) {
     super(cluster, traits, List.of(), table);
     this.table = table;
@@ -87,8 +89,8 @@ public final class ElasticsearchScan extends org.apache.calcite.rel.core.TableSc
     this.sort = List.copyOf(sort);
     this.offset = offset;
     this.fetch = fetch;
-    this.groups = groups;
-    this.aggregates = aggregates;
+    this.groups = groups == null ? null : List.copyOf(groups);
+    this.aggregates = aggregates == null ? null : List.copyOf(aggregates);
     this.highlight = highlight;
   }
 
@@ -176,7 +178,13 @@ public final class ElasticsearchScan extends org.apache.calcite.rel.core.TableSc
         .itemIf("sort", sort, !sort.isEmpty())
         .itemIf("offset", offset, offset != 0)
         .itemIf("fetch", fetch, fetch != null)
-        .itemIf("aggregation", aggregateBody(), aggregates != null);
+        .itemIf("aggregation", aggregateBody(), aggregates != null)
+        .itemIf(
+            "grouping",
+            groups == null
+                ? List.of()
+                : groups.stream().map(ElasticsearchGrouping::source).toList(),
+            groups != null && !groups.isEmpty());
   }
 
   @Override
@@ -186,6 +194,7 @@ public final class ElasticsearchScan extends org.apache.calcite.rel.core.TableSc
     planner.addRule(PROJECT);
     planner.addRule(SORT);
     planner.addRule(AGGREGATE);
+    planner.addRule(AGGREGATE_PROJECT);
   }
 
   @Override
@@ -355,81 +364,67 @@ public final class ElasticsearchScan extends org.apache.calcite.rel.core.TableSc
           "ElasticsearchAggregate") {
         @Override
         public void onMatch(RelOptRuleCall call) {
-          Aggregate aggregate = call.rel(0);
           ElasticsearchScan scan = call.rel(1);
-          if (scan.aggregates != null
-              || scan.fetch != null
-              || scan.offset != 0
-              || !Aggregate.isSimple(aggregate)) return;
-          List<Field> groups =
-              aggregate.getGroupSet().asList().stream().map(scan.fields::get).toList();
-          if (groups.stream()
-              .anyMatch(f -> !f.exact() || List.of("_id", "_score").contains(f.name()))) return;
-          for (AggregateCall agg : aggregate.getAggCallList()) {
-            String name = agg.getAggregation().getName().toUpperCase(java.util.Locale.ROOT);
-            if (agg.filterArg >= 0
-                || (agg.isDistinct() && !agg.isApproximate())
-                || !agg.collation.getFieldCollations().isEmpty()
-                || !List.of(
-                        "COUNT",
-                        "SUM",
-                        "$SUM0",
-                        "SUM0",
-                        "MIN",
-                        "MAX",
-                        "AVG",
-                        "DISTINCT_COUNT_APPROX",
-                        "APPROX_COUNT_DISTINCT")
-                    .contains(name)
-                || agg.getArgList().size() > 1
-                || (agg.getArgList().isEmpty() && !name.equals("COUNT"))) return;
-            if (!agg.getArgList().isEmpty()
-                && (!scan.fields.get(agg.getArgList().getFirst()).exact()
-                    || List.of("_id", "_score")
-                        .contains(scan.fields.get(agg.getArgList().getFirst()).name()))) return;
-            if (!agg.getArgList().isEmpty()
-                && List.of("MIN", "MAX", "SUM", "SUM0", "$SUM0").contains(name)) {
-              SqlTypeName inputType = scan.fields.get(agg.getArgList().getFirst()).sqlType();
-              // ES numeric metrics use doubles; preserve exact 64-bit/unsigned results locally.
-              if (inputType == SqlTypeName.BIGINT || inputType == SqlTypeName.DECIMAL) return;
-            }
-          }
-          call.transformTo(
-              new ElasticsearchScan(
-                  scan.getCluster(),
-                  scan.traitSet.replace(org.apache.calcite.rel.RelCollations.EMPTY),
-                  scan.table,
-                  scan.source,
-                  aggregate.getRowType(),
-                  scan.fields,
-                  scan.query,
-                  List.of(),
-                  0,
-                  null,
-                  groups,
-                  List.copyOf(aggregate.getAggCallList()),
-                  scan.highlight));
+          scan.pushAggregate(call, call.rel(0), null);
         }
       };
+
+  private static final RelOptRule AGGREGATE_PROJECT =
+      new RelOptRule(
+          operand(
+              Aggregate.class, operand(Project.class, operand(ElasticsearchScan.class, none()))),
+          "ElasticsearchAggregateProject") {
+        @Override
+        public void onMatch(RelOptRuleCall call) {
+          ElasticsearchScan scan = call.rel(2);
+          scan.pushAggregate(call, call.rel(0), call.rel(1));
+        }
+      };
+
+  private void pushAggregate(RelOptRuleCall call, Aggregate aggregate, Project project) {
+    if (aggregates != null || fetch != null || offset != 0 || !Aggregate.isSimple(aggregate))
+      return;
+    List<RexNode> inputs = new ArrayList<>();
+    if (project == null) {
+      for (int index = 0; index < rowType.getFieldCount(); index++)
+        inputs.add(RexInputRef.of(index, rowType));
+    } else {
+      inputs.addAll(project.getProjects());
+    }
+    List<ElasticsearchGrouping> groupSources = new ArrayList<>();
+    for (int index : aggregate.getGroupSet()) {
+      ElasticsearchGrouping group = ElasticsearchGrouping.translate(inputs.get(index), fields);
+      if (group == null) return;
+      groupSources.add(group);
+    }
+    List<ElasticsearchMetric> metrics = new ArrayList<>();
+    for (AggregateCall agg : aggregate.getAggCallList()) {
+      ElasticsearchMetric metric =
+          ElasticsearchMetric.translate(agg, inputs, fields, getCluster().getRexBuilder());
+      if (metric == null) return;
+      metrics.add(metric);
+    }
+    call.transformTo(
+        new ElasticsearchScan(
+            getCluster(),
+            traitSet.replace(org.apache.calcite.rel.RelCollations.EMPTY),
+            table,
+            source,
+            aggregate.getRowType(),
+            fields,
+            query,
+            List.of(),
+            0,
+            null,
+            groupSources,
+            List.copyOf(metrics),
+            highlight));
+  }
 
   private Map<String, Object> aggregateBody() {
     if (aggregates == null) return Map.of();
     Map<String, Object> metrics = new LinkedHashMap<>();
-    for (int i = 0; i < aggregates.size(); i++) {
-      AggregateCall agg = aggregates.get(i);
-      if (agg.getArgList().isEmpty()) continue;
-      String field = fields.get(agg.getArgList().getFirst()).name();
-      String name = agg.getAggregation().getName().toUpperCase(java.util.Locale.ROOT);
-      String operation =
-          switch (name) {
-            case "COUNT" -> agg.isDistinct() && agg.isApproximate() ? "cardinality" : "value_count";
-            case "DISTINCT_COUNT_APPROX", "APPROX_COUNT_DISTINCT" -> "cardinality";
-            case "SUM", "SUM0", "$SUM0" -> "sum";
-            default -> name.toLowerCase(java.util.Locale.ROOT);
-          };
-      metrics.put("a" + i, Map.of(operation, Map.of("field", field)));
-      if (name.equals("SUM")) metrics.put("n" + i, Map.of("value_count", Map.of("field", field)));
-    }
+    for (int i = 0; i < aggregates.size(); i++) metrics.putAll(aggregates.get(i).aggregations(i));
     return metrics;
   }
 
@@ -530,11 +525,7 @@ public final class ElasticsearchScan extends org.apache.calcite.rel.core.TableSc
         } else {
           List<Object> sources = new ArrayList<>();
           for (int i = 0; i < groups.size(); i++)
-            sources.add(
-                Map.of(
-                    "g" + i,
-                    Map.of(
-                        "terms", Map.of("field", groups.get(i).name(), "missing_bucket", true))));
+            sources.add(Map.of("g" + i, groups.get(i).source()));
           Map<String, Object> composite = new LinkedHashMap<>();
           composite.put("size", 1000);
           composite.put("sources", sources);
@@ -585,18 +576,10 @@ public final class ElasticsearchScan extends org.apache.calcite.rel.core.TableSc
 
     private Object[] aggregateRow(Map<String, Object> bucket) {
       Object[] values = new Object[groups.size() + aggregates.size()];
-      for (int i = 0; i < groups.size(); i++) values[i] = object(bucket.get("key")).get("g" + i);
-      for (int i = 0; i < aggregates.size(); i++) {
-        AggregateCall agg = aggregates.get(i);
-        Object value =
-            agg.getArgList().isEmpty()
-                ? bucket.get("doc_count")
-                : object(bucket.get("a" + i)).get("value");
-        if (agg.getAggregation().getName().equalsIgnoreCase("SUM")
-            && ((Number) object(bucket.get("n" + i)).getOrDefault("value", 0)).longValue() == 0)
-          value = null;
-        values[groups.size() + i] = value;
-      }
+      for (int i = 0; i < groups.size(); i++)
+        values[i] = groups.get(i).value(object(bucket.get("key")).get("g" + i));
+      for (int i = 0; i < aggregates.size(); i++)
+        values[groups.size() + i] = aggregates.get(i).value(bucket, i);
       for (int i = 0; i < values.length; i++)
         values[i] = convert(values[i], rowType.getFieldList().get(i).getType());
       return values;

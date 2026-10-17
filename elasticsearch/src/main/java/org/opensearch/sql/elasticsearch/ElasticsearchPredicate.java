@@ -16,6 +16,9 @@ import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexLiteral;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.sql.SqlKind;
+import org.apache.calcite.sql.fun.SqlLibraryOperators;
+import org.apache.calcite.sql.fun.SqlLikeOperator;
+import org.apache.calcite.sql.type.SqlTypeName;
 import org.opensearch.sql.elasticsearch.ElasticsearchQueryBackend.Field;
 
 /** Translates only predicates whose SQL null semantics can be preserved by Elasticsearch. */
@@ -23,10 +26,31 @@ final class ElasticsearchPredicate {
   private ElasticsearchPredicate() {}
 
   static Map<String, Object> translate(RexNode expression, List<Field> fields) {
-    if (expression instanceof RexLiteral literal && literal.getValueAs(Boolean.class) != null) {
+    return translate(expression, fields, true);
+  }
+
+  /**
+   * Selects the TRUE or FALSE rows of an expression. UNKNOWN belongs to neither set: complementing
+   * only the TRUE query would incorrectly admit nulls under NOT, especially inside AND/OR.
+   */
+  private static Map<String, Object> translate(
+      RexNode expression, List<Field> fields, boolean truth) {
+    if (expression instanceof RexLiteral literal) {
+      if (literal.isNull()) return Map.of("match_none", Map.of());
+      if (literal.getType().getSqlTypeName() != SqlTypeName.BOOLEAN) return null;
       return Map.of(
-          Boolean.TRUE.equals(literal.getValueAs(Boolean.class)) ? "match_all" : "match_none",
+          Boolean.valueOf(truth).equals(literal.getValueAs(Boolean.class))
+              ? "match_all"
+              : "match_none",
           Map.of());
+    }
+    if (expression instanceof RexInputRef ref) {
+      Field field = fields.get(ref.getIndex());
+      return field.exact()
+              && field.mappingType().equals("boolean")
+              && ref.getType().getSqlTypeName() == SqlTypeName.BOOLEAN
+          ? Map.of("term", Map.of(field.name(), truth))
+          : null;
     }
     if (!(expression instanceof RexCall call)) return null;
     String name = call.getOperator().getName().toLowerCase(Locale.ROOT);
@@ -39,26 +63,66 @@ final class ElasticsearchPredicate {
             "query_string",
             "simple_query_string")
         .contains(name)) {
-      return search(call, fields, name);
+      Map<String, Object> query = search(call, fields, name);
+      // RelevanceQueryFunction returns a non-nullable BOOLEAN: an unmatched/missing field is
+      // FALSE. Do not assume that contract for a nullable function with the same name.
+      return query == null || (!truth && call.getType().isNullable())
+          ? null
+          : truth ? query : not(query);
     }
     List<RexNode> args = call.getOperands();
     if (call.getKind() == SqlKind.AND || call.getKind() == SqlKind.OR) {
       List<Map<String, Object>> children = new ArrayList<>();
       for (RexNode arg : args) {
-        Map<String, Object> child = translate(arg, fields);
+        Map<String, Object> child = translate(arg, fields, truth);
+        // In particular an OR must never be partially pushed.
         if (child == null) return null;
         children.add(child);
       }
-      return call.getKind() == SqlKind.AND
-          ? and(children)
-          : Map.of("bool", Map.of("should", children, "minimum_should_match", 1));
+      return (call.getKind() == SqlKind.AND) == truth ? and(children) : or(children);
     }
-    if ((call.getKind() == SqlKind.IS_NULL || call.getKind() == SqlKind.IS_NOT_NULL)
-        && args.getFirst() instanceof RexInputRef ref) {
-      Field field = fields.get(ref.getIndex());
-      if (!field.exact() || field.name().equals("_score")) return null;
-      Map<String, Object> exists = Map.of("exists", Map.of("field", field.name()));
-      return call.getKind() == SqlKind.IS_NULL ? not(exists) : exists;
+    if (args.size() == 1) {
+      RexNode arg = args.getFirst();
+      switch (call.getKind()) {
+        case NOT:
+          return translate(arg, fields, !truth);
+        case IS_TRUE, IS_FALSE, IS_NOT_TRUE, IS_NOT_FALSE:
+          boolean wanted =
+              call.getKind() == SqlKind.IS_TRUE || call.getKind() == SqlKind.IS_NOT_TRUE;
+          Map<String, Object> selected = translate(arg, fields, wanted);
+          boolean complement =
+              call.getKind() == SqlKind.IS_NOT_TRUE || call.getKind() == SqlKind.IS_NOT_FALSE;
+          return selected == null ? null : truth != complement ? selected : not(selected);
+        case IS_NULL, IS_NOT_NULL, IS_UNKNOWN:
+          Map<String, Object> known;
+          if (arg instanceof RexInputRef ref) {
+            Field field = fields.get(ref.getIndex());
+            if (!field.exact() || field.name().equals("_score")) return null;
+            known = exists(field);
+          } else {
+            Map<String, Object> yes = translate(arg, fields, true);
+            Map<String, Object> no = translate(arg, fields, false);
+            if (yes == null || no == null) return null;
+            known = or(List.of(yes, no));
+          }
+          return (call.getKind() == SqlKind.IS_NOT_NULL) == truth ? known : not(known);
+        default:
+          return null;
+      }
+    }
+    if (call.getKind() == SqlKind.LIKE && call.getOperator() instanceof SqlLikeOperator like) {
+      return pattern(call, fields, truth != like.isNegated(), !like.isCaseSensitive(), true);
+    }
+    if (call.getOperator() == SqlLibraryOperators.REGEXP_CONTAINS
+        || call.getOperator() == SqlLibraryOperators.REGEXP
+        || call.getOperator() == SqlLibraryOperators.RLIKE
+        || call.getOperator() == SqlLibraryOperators.NOT_RLIKE) {
+      return pattern(
+          call,
+          fields,
+          truth != (call.getOperator() == SqlLibraryOperators.NOT_RLIKE),
+          false,
+          false);
     }
     if (args.size() != 2) return null;
     RexNode left = args.get(0), right = args.get(1);
@@ -90,13 +154,25 @@ final class ElasticsearchPredicate {
         .contains(kind)) return null;
     Object value = literal(literal);
     if (value == null) return Map.of("match_none", Map.of());
+    // These mappings quantize indexed values, while local evaluation reads the original _source
+    // double. Presence is preserved, but neither equality nor ordering is necessarily preserved.
+    if (Set.of("float", "half_float", "scaled_float").contains(field.mappingType())) return null;
+    if (!truth) {
+      kind =
+          switch (kind) {
+            case EQUALS -> SqlKind.NOT_EQUALS;
+            case NOT_EQUALS -> SqlKind.EQUALS;
+            case LESS_THAN -> SqlKind.GREATER_THAN_OR_EQUAL;
+            case LESS_THAN_OR_EQUAL -> SqlKind.GREATER_THAN;
+            case GREATER_THAN -> SqlKind.LESS_THAN_OR_EQUAL;
+            case GREATER_THAN_OR_EQUAL -> SqlKind.LESS_THAN;
+            default -> kind;
+          };
+    }
     return switch (kind) {
       case EQUALS -> Map.of("term", Map.of(field.name(), value));
       case NOT_EQUALS ->
-          and(
-              List.of(
-                  Map.of("exists", Map.of("field", field.name())),
-                  not(Map.of("term", Map.of(field.name(), value)))));
+          and(List.of(exists(field), not(Map.of("term", Map.of(field.name(), value)))));
       case LESS_THAN, LESS_THAN_OR_EQUAL, GREATER_THAN, GREATER_THAN_OR_EQUAL -> {
         if (field.name().equals("_id")) yield null;
         String operator =
@@ -116,8 +192,142 @@ final class ElasticsearchPredicate {
     return Map.of("bool", Map.of("must", children));
   }
 
+  private static Map<String, Object> or(List<Map<String, Object>> children) {
+    return Map.of("bool", Map.of("should", children, "minimum_should_match", 1));
+  }
+
   private static Map<String, Object> not(Map<String, Object> child) {
     return Map.of("bool", Map.of("must_not", child));
+  }
+
+  private static Map<String, Object> exists(Field field) {
+    return Map.of("exists", Map.of("field", field.name()));
+  }
+
+  private static Map<String, Object> pattern(
+      RexCall call, List<Field> fields, boolean truth, boolean insensitive, boolean like) {
+    List<RexNode> args = call.getOperands();
+    if (args.size() != 2 && !(like && args.size() == 3)) return null;
+    if (!(args.get(0) instanceof RexInputRef ref) || !(args.get(1) instanceof RexLiteral literal))
+      return null;
+    Field field = fields.get(ref.getIndex());
+    // Metadata fields such as _id and analyzed/normalized values do not support these semantics.
+    if (!field.exact()
+        || !field.mappingType().equals("keyword")
+        || Set.of("_id", "_index", "_score").contains(field.name())) return null;
+    if (literal.isNull()) return Map.of("match_none", Map.of());
+    if (!SqlTypeName.CHAR_TYPES.contains(literal.getType().getSqlTypeName())) return null;
+    String value = literal.getValueAs(String.class);
+    Map<String, Object> query;
+    if (like) {
+      char escape = 0;
+      if (args.size() == 3) {
+        if (!(args.get(2) instanceof RexLiteral escaping)) return null;
+        if (escaping.isNull()) return Map.of("match_none", Map.of());
+        if (!SqlTypeName.CHAR_TYPES.contains(escaping.getType().getSqlTypeName())) return null;
+        String text = escaping.getValueAs(String.class);
+        if (text.length() != 1 || Character.isSurrogate(text.charAt(0))) return null;
+        escape = text.charAt(0);
+      }
+      query = like(field, value, escape, insensitive);
+    } else {
+      String wildcard = regexLiteral(value);
+      query = wildcard == null ? null : Map.of("wildcard", Map.of(field.name(), wildcard));
+    }
+    return query == null ? null : truth ? query : and(List.of(exists(field), not(query)));
+  }
+
+  private static Map<String, Object> like(
+      Field field, String pattern, char escape, boolean insensitive) {
+    StringBuilder wildcard = new StringBuilder();
+    StringBuilder regex = new StringBuilder();
+    boolean needsRegex = insensitive;
+    for (int i = 0; i < pattern.length(); i++) {
+      char ch = pattern.charAt(i);
+      // Calcite uses NUL to mean no escape, but still treats a NUL in the pattern as an escape.
+      if (ch == 0
+          || (Character.isSurrogate(ch)
+              && !(Character.isHighSurrogate(ch)
+                  && i + 1 < pattern.length()
+                  && Character.isLowSurrogate(pattern.charAt(i + 1))))) return null;
+      if (ch == escape) {
+        if (++i == pattern.length()) return null;
+        ch = pattern.charAt(i);
+        if (ch != escape && ch != '%' && ch != '_') return null;
+      } else if (ch == '%') {
+        wildcard.append('*');
+        regex.append(".*");
+        continue;
+      } else if (ch == '_') {
+        // Java LIKE's '_' is a regex dot without DOTALL. Lucene '?' also matches line breaks.
+        needsRegex = true;
+        regex.append("[^\n\r\u0085\u2028\u2029]");
+        continue;
+      }
+      int codePoint = Character.isHighSurrogate(ch) ? pattern.codePointAt(i++) : ch;
+      globLiteral(wildcard, codePoint);
+      if (insensitive
+          && ((codePoint >= 'a' && codePoint <= 'z') || (codePoint >= 'A' && codePoint <= 'Z'))) {
+        // Calcite ILIKE uses Java CASE_INSENSITIVE without UNICODE_CASE. Spell out ASCII pairs
+        // rather than depending on the Elasticsearch/Lucene version's case-folding flags.
+        regex
+            .append('[')
+            .appendCodePoint(Character.toLowerCase(codePoint))
+            .appendCodePoint(Character.toUpperCase(codePoint))
+            .append(']');
+      } else {
+        if ("\\.?+*|{}[]()\"#@&<>~".indexOf(codePoint) >= 0) regex.append('\\');
+        regex.appendCodePoint(codePoint);
+      }
+    }
+    return needsRegex
+        ? Map.of("regexp", Map.of(field.name(), Map.of("value", regex.toString(), "flags", "NONE")))
+        : Map.of("wildcard", Map.of(field.name(), wildcard.toString()));
+  }
+
+  /**
+   * REGEXP_CONTAINS/REGEXP use Java find(), not Lucene's whole-term regex matching. Accept only
+   * literal substrings, optional ^/\\A and \\z anchors, and a redundant trailing .* without an end
+   * anchor. In particular '$' can match before a final newline, and Java dot excludes line breaks;
+   * neither is silently translated to a Lucene anchor or wildcard.
+   */
+  private static String regexLiteral(String pattern) {
+    boolean start = pattern.startsWith("^") || pattern.startsWith("\\A");
+    int from = pattern.startsWith("^") ? 1 : pattern.startsWith("\\A") ? 2 : 0;
+    int to = pattern.length();
+    StringBuilder result = new StringBuilder(start ? "" : "*");
+    boolean end = false;
+    for (int i = from; i < to; i++) {
+      char ch = pattern.charAt(i);
+      if (ch == '\\') {
+        if (++i == to) return null;
+        ch = pattern.charAt(i);
+        if (ch == 'z' && i == to - 1) {
+          end = true;
+          break;
+        }
+        if ("\\.^$|?*+()[]{}".indexOf(ch) < 0) return null;
+      } else if (ch == '.' && i == to - 2 && pattern.charAt(i + 1) == '*') {
+        break;
+      } else if (".^$|?*+()[]{}".indexOf(ch) >= 0) {
+        return null;
+      }
+      if (Character.isSurrogate(ch)) {
+        if (!Character.isHighSurrogate(ch)
+            || i + 1 == to
+            || !Character.isLowSurrogate(pattern.charAt(i + 1))) return null;
+        globLiteral(result, pattern.codePointAt(i++));
+      } else {
+        globLiteral(result, ch);
+      }
+    }
+    if (!end) result.append('*');
+    return result.toString();
+  }
+
+  private static void globLiteral(StringBuilder result, int ch) {
+    if (ch == '*' || ch == '?' || ch == '\\') result.append('\\');
+    result.appendCodePoint(ch);
   }
 
   private static Object literal(RexLiteral literal) {
