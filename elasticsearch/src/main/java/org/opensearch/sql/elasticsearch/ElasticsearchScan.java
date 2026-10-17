@@ -520,7 +520,7 @@ public final class ElasticsearchScan extends org.apache.calcite.rel.core.TableSc
         }
         if (fields.stream().anyMatch(field -> field.name().equals("_score")))
           request.put("track_scores", true);
-        request.put("_source", fields.stream().map(Field::source).distinct().toList());
+        request.put("_source", fields.stream().flatMap(Field::sourcePaths).distinct().toList());
         if (after != null) request.put("search_after", after);
       } else {
         request.put("size", 0);
@@ -572,7 +572,7 @@ public final class ElasticsearchScan extends org.apache.calcite.rel.core.TableSc
       Map<String, Object> document = object(hit.get("_source"));
       for (int i = 0; i < values.length; i++) {
         Object value = document;
-        for (String segment : fields.get(i).source().split("\\."))
+        for (String segment : fields.get(i).source(String.valueOf(hit.get("_index"))).split("\\."))
           value = object(value).get(segment);
         if (fields.get(i).name().equals("_id")
             || fields.get(i).name().equals("_index")

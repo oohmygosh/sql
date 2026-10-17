@@ -59,17 +59,28 @@ class QueryApplicationLiveTest {
 
     @Test
     void elasticsearchSqlExecutesRealQuery() throws Exception {
-        assertElasticsearchQuery(QueryType.SQL, "SELECT count(*)  FROM logevent-107-000064");
+        assertElasticsearchQuery(QueryType.SQL, "SELECT *  FROM logevent-107-000064 limit 1");
     }
 
     @Test
     void elasticsearchPplExecutesRealQuery() throws Exception {
-        assertElasticsearchQuery(QueryType.PPL, "source=logevent-107-000064 | stats count() as total");
+        // assertElasticsearchQuery(QueryType.PPL, """
+        //         source=`*`
+        //         | fields id, timestamp, hostIp
+        //         | where hostIp = '192.168.100.177' and timestamp < "2026-10-17"
+        //         | sort - timestamp
+        //         | head 5 from 2
+        //         """);
+        assertElasticsearchQuery(QueryType.PPL, """
+                source=`*`
+                | where timestamp > "2026-10-11"
+                | stats count()  as requests by span(timestamp, 1d) as time_bucket
+                """);
     }
 
     @Test
     void clickHouseSqlExecutesRealQuery() throws Exception {
-        assertClickHouseQuery(QueryType.SQL, "SELECT count(*)  FROM `log_event`");
+        assertClickHouseQuery(QueryType.SQL, "SELECT count(*) FROM `log_event` where hostIp = '192.168.100.177'");
         // assertClickHouseQuery(QueryType.SQL);
     }
 
@@ -100,10 +111,12 @@ class QueryApplicationLiveTest {
 
     private void assertElasticsearchQuery(QueryType language, String query) throws Exception {
         long expected = nativeElasticsearchCount();
+        long queryStarted = System.nanoTime();
         QueryResponse response =
                 queries.execute("logs", language, query);
+        long queryElapsedNanos = System.nanoTime() - queryStarted;
         // assertCount(response, expected);
-        printResult("logs", language, response);
+        printResult("logs", language, response, queryElapsedNanos);
     }
 
     private void assertElasticsearchQuery(QueryType language) throws Exception {
@@ -112,10 +125,12 @@ class QueryApplicationLiveTest {
 
     private void assertClickHouseQuery(QueryType language, String query) throws Exception {
         long expected = nativeClickHouseCount();
+        long queryStarted = System.nanoTime();
         QueryResponse response =
                 queries.execute("analytics", language, query);
+        long queryElapsedNanos = System.nanoTime() - queryStarted;
         // assertCount(response, expected);
-        printResult("analytics", language, response);
+        printResult("analytics", language, response, queryElapsedNanos);
     }
 
     private void assertClickHouseQuery(QueryType language) throws Exception {
@@ -207,8 +222,11 @@ class QueryApplicationLiveTest {
                 .isEqualTo(expected);
     }
 
-    private static void printResult(String source, QueryType language, QueryResponse response) {
-        System.out.printf("=== %s / %s ===%n", source, language);
+    private static void printResult(
+            String source, QueryType language, QueryResponse response, long queryElapsedNanos) {
+        System.out.printf(
+                "=== %s / %s | query: %.3f ms ===%n",
+                source, language, queryElapsedNanos / 1_000_000.0);
         System.out.println(
                 new SimpleJsonResponseFormatter(Style.PRETTY)
                         .format(

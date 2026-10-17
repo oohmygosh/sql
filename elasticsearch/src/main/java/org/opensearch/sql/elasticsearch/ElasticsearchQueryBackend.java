@@ -129,16 +129,36 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
       throw e;
     }
     Map<String, Field> fields = new LinkedHashMap<>();
-    for (Object mapping : mappings.values()) {
-      collectFields("", "", object(object(mapping).get("mappings")).get("properties"), fields);
-    }
+    // Collect routing separately to avoid copying all prior index paths on every field merge.
+    Map<String, Map<String, String>> sources = new LinkedHashMap<>();
+    mappings.forEach(
+        (name, mapping) ->
+            collectFields(
+                name,
+                "",
+                "",
+                object(object(mapping).get("mappings")).get("properties"),
+                fields,
+                sources));
+    fields.replaceAll(
+        (fieldName, field) -> {
+          Map<String, String> paths = sources.get(fieldName);
+          if (paths.values().stream().allMatch(field.source()::equals)) return field;
+          return new Field(
+              field.name(), field.source(), field.mappingType(), field.sourceCompatible(), paths);
+        });
     fieldTypes.forEach(
         (fieldName, type) -> {
           Field original = fields.get(fieldName);
           if (original != null)
             fields.put(
                 fieldName,
-                new Field(original.name(), original.source(), type, original.sourceCompatible()));
+                new Field(
+                    original.name(),
+                    original.source(),
+                    type,
+                    original.sourceCompatible(),
+                    original.sources()));
         });
     fields.put("_id", new Field("_id", "_id", "keyword"));
     fields.put("_index", new Field("_index", "_index", "keyword"));
@@ -147,7 +167,12 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
   }
 
   private static void collectFields(
-      String prefix, String sourcePrefix, Object properties, Map<String, Field> fields) {
+      String index,
+      String prefix,
+      String sourcePrefix,
+      Object properties,
+      Map<String, Field> fields,
+      Map<String, Map<String, String>> sources) {
     object(properties)
         .forEach(
             (name, value) -> {
@@ -163,12 +188,18 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
                       java.util.Collections.disjoint(
                           mapping.keySet(),
                           Set.of("normalizer", "null_value", "ignore_above", "ignore_malformed")));
-              Field old = fields.putIfAbsent(fieldName, field);
-              if (old != null && !old.equals(field)) {
-                throw new IllegalArgumentException("Conflicting mappings for field " + fieldName);
-              }
+              fields.merge(fieldName, field, Field::merge);
+              sources
+                  .computeIfAbsent(fieldName, key -> new LinkedHashMap<>())
+                  .put(index, sourceName);
               if (mapping.containsKey("properties") && !type.equals("nested")) {
-                collectFields(fieldName + ".", sourceName + ".", mapping.get("properties"), fields);
+                collectFields(
+                    index,
+                    fieldName + ".",
+                    sourceName + ".",
+                    mapping.get("properties"),
+                    fields,
+                    sources);
               }
               object(mapping.get("fields"))
                   .forEach(
@@ -185,10 +216,10 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
                                         "null_value",
                                         "ignore_above",
                                         "ignore_malformed")));
-                        Field prior = fields.putIfAbsent(sub.name(), sub);
-                        if (prior != null && !prior.equals(sub))
-                          throw new IllegalArgumentException(
-                              "Conflicting mappings for field " + sub.name());
+                        fields.merge(sub.name(), sub, Field::merge);
+                        sources
+                            .computeIfAbsent(sub.name(), key -> new LinkedHashMap<>())
+                            .put(index, sourceName);
                       });
             });
   }
@@ -198,7 +229,8 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
       Request request = new Request(method, endpoint);
       if (body != null) request.setJsonEntity(mapper.writeValueAsString(body));
       String json = EntityUtils.toString(client.performRequest(request).getEntity());
-      return mapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+      return mapper.readValue(json, new TypeReference<>() {
+      });
     } catch (IOException e) {
       throw new BackendException("Elasticsearch request failed: " + method + " " + endpoint, e);
     }
@@ -213,9 +245,58 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
     return value instanceof Map ? (Map<String, Object>) value : Map.of();
   }
 
-  record Field(String name, String source, String mappingType, boolean sourceCompatible) {
+  record Field(
+      String name,
+      String source,
+      String mappingType,
+      boolean sourceCompatible,
+      Map<String, String> sources) {
+    Field {
+      sources = Map.copyOf(sources);
+    }
+
     Field(String name, String source, String mappingType) {
       this(name, source, mappingType, true);
+    }
+
+    Field(String name, String source, String mappingType, boolean sourceCompatible) {
+      this(name, source, mappingType, sourceCompatible, Map.of());
+    }
+
+    Field merge(Field other) {
+      Map<String, String> mergedSources = new LinkedHashMap<>(sources);
+      mergedSources.putAll(other.sources);
+      boolean sameSource = source.equals(other.source);
+      return new Field(
+          name,
+          sameSource ? source : name,
+          mergedMappingType(other),
+          sourceCompatible
+              && other.sourceCompatible
+              && sameSource
+              && mappingType.equals(other.mappingType),
+          mergedSources);
+    }
+
+    private String mergedMappingType(Field other) {
+      if (mappingType.equals(other.mappingType)) return mappingType;
+      List<String> integers = List.of("byte", "short", "integer", "long", "unsigned_long");
+      int left = integers.indexOf(mappingType), right = integers.indexOf(other.mappingType);
+      if (left >= 0 && right >= 0) return integers.get(Math.max(left, right));
+      Set<String> floating = Set.of("half_float", "float", "double", "scaled_float");
+      if (floating.contains(mappingType) && floating.contains(other.mappingType)) return "double";
+      // A heterogeneous field has no single static type. Preserve its source values rather than
+      // coercing them to the first index's mapping, or losing large integers by promoting to
+      // double.
+      return "any";
+    }
+
+    String source(String index) {
+      return sources.getOrDefault(index, source);
+    }
+
+    java.util.stream.Stream<String> sourcePaths() {
+      return sources.isEmpty() ? java.util.stream.Stream.of(source) : sources.values().stream();
     }
 
     RelDataType type(RelDataTypeFactory factory) {
@@ -241,7 +322,7 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
         case "float", "half_float", "double", "scaled_float" -> SqlTypeName.DOUBLE;
         case "boolean" -> SqlTypeName.BOOLEAN;
         case "date", "date_nanos" -> SqlTypeName.TIMESTAMP;
-        case "object", "nested", "flattened" -> SqlTypeName.ANY;
+        case "object", "nested", "flattened", "any" -> SqlTypeName.ANY;
         default -> SqlTypeName.VARCHAR;
       };
     }
@@ -249,7 +330,7 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
     boolean exact() {
       return sourceCompatible
           && !mappingType.startsWith("array<")
-          && !Set.of("text", "object", "nested", "flattened").contains(mappingType);
+          && !Set.of("text", "object", "nested", "flattened", "any").contains(mappingType);
     }
   }
 
