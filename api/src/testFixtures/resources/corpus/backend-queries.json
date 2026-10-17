@@ -127,7 +127,7 @@
     "expected": []
   },
   {
-    "id": "sql_case_coalesce",
+    "id": "sql_case_ifnull",
     "language": "SQL",
     "family": "expression",
     "query": "SELECT id,CASE WHEN status=200 THEN 'ok' ELSE 'bad' END AS state,ifnull(amount,0) AS value FROM ${events} ORDER BY id",
@@ -424,7 +424,7 @@
     "ordered": true
   },
   {
-    "id": "sql_moving_sum",
+    "id": "sql_partition_sum",
     "language": "SQL",
     "family": "window",
     "query": "SELECT id,sum(amount) OVER(PARTITION BY team) AS total FROM ${events} ORDER BY id",

@@ -5,21 +5,25 @@
 
 package org.opensearch.sql.calcite.utils;
 
+import com.google.common.collect.ImmutableList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.logical.LogicalValues;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexPermuteInputsShuttle;
 import org.apache.calcite.rex.RexVisitor;
+import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.validate.SqlValidator;
 import org.apache.calcite.sql2rel.RelFieldTrimmer;
 import org.apache.calcite.tools.RelBuilder;
 import org.apache.calcite.util.ImmutableBitSet;
 import org.apache.calcite.util.mapping.Mapping;
+import org.apache.calcite.util.mapping.MappingType;
 import org.apache.calcite.util.mapping.Mappings;
 import org.checkerframework.checker.nullness.qual.Nullable;
 import org.opensearch.sql.calcite.plan.rel.Dedup;
@@ -33,6 +37,31 @@ public class OpenSearchRelFieldTrimmer extends RelFieldTrimmer {
 
   public OpenSearchRelFieldTrimmer(@Nullable SqlValidator validator, RelBuilder relBuilder) {
     super(validator, relBuilder);
+  }
+
+  @Override
+  public TrimResult trimFields(
+      LogicalValues values, ImmutableBitSet used, Set<RelDataTypeField> extra) {
+    // Constant projections can leave zero-column Values that still carry row multiplicity.
+    // Calcite 1.42's default trimmer selects field -1 for this valid COUNT(*) input.
+    if (values.getRowType().getFieldCount() == 0) {
+      var integer = values.getCluster().getTypeFactory().createSqlType(SqlTypeName.INTEGER);
+      var type =
+          values
+              .getCluster()
+              .getTypeFactory()
+              .builder()
+              .add("__row_multiplicity__", integer)
+              .build();
+      var zero = values.getCluster().getRexBuilder().makeZeroLiteral(integer);
+      var tuples =
+          values.getTuples().stream()
+              .map(row -> ImmutableList.of(zero))
+              .collect(ImmutableList.toImmutableList());
+      var padded = LogicalValues.create(values.getCluster(), type, tuples);
+      return result(padded, Mappings.create(MappingType.PARTIAL_FUNCTION, 0, 1));
+    }
+    return super.trimFields(values, used, extra);
   }
 
   public TrimResult trimFields(

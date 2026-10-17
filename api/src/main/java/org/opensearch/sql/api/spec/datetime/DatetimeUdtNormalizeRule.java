@@ -5,13 +5,18 @@
 
 package org.opensearch.sql.api.spec.datetime;
 
+import java.util.ArrayList;
 import java.util.Optional;
 import org.apache.calcite.rel.RelHomogeneousShuttle;
 import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.Filter;
+import org.apache.calcite.rel.core.Join;
+import org.apache.calcite.rel.core.Project;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeFactory;
 import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexCall;
+import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexShuttle;
 import org.apache.calcite.sql.type.SqlTypeName;
@@ -32,21 +37,19 @@ class DatetimeUdtNormalizeRule extends RelHomogeneousShuttle {
     try {
       RelNode updated = child.accept(this);
       if (updated == child) return parent;
-      var inputs = new java.util.ArrayList<>(parent.getInputs());
+      var inputs = new ArrayList<>(parent.getInputs());
       inputs.set(index, updated);
       var fields =
           inputs.stream().flatMap(input -> input.getRowType().getFieldList().stream()).toList();
       RexShuttle references =
           new RexShuttle() {
             @Override
-            public RexNode visitInputRef(org.apache.calcite.rex.RexInputRef ref) {
+            public RexNode visitInputRef(RexInputRef ref) {
               var type = fields.get(ref.getIndex()).getType();
-              return ref.getType().equals(type)
-                  ? ref
-                  : new org.apache.calcite.rex.RexInputRef(ref.getIndex(), type);
+              return ref.getType().equals(type) ? ref : new RexInputRef(ref.getIndex(), type);
             }
           };
-      if (parent instanceof org.apache.calcite.rel.core.Project project) {
+      if (parent instanceof Project project) {
         var expressions =
             project.getProjects().stream().map(expr -> expr.accept(references)).toList();
         var type =
@@ -58,9 +61,9 @@ class DatetimeUdtNormalizeRule extends RelHomogeneousShuttle {
                     project.getRowType().getFieldNames());
         return project.copy(project.getTraitSet(), updated, expressions, type);
       }
-      if (parent instanceof org.apache.calcite.rel.core.Filter filter)
+      if (parent instanceof Filter filter)
         return filter.copy(filter.getTraitSet(), updated, filter.getCondition().accept(references));
-      if (parent instanceof org.apache.calcite.rel.core.Join join)
+      if (parent instanceof Join join)
         return join.copy(
             join.getTraitSet(),
             join.getCondition().accept(references),

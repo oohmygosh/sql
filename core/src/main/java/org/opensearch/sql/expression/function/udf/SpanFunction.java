@@ -117,7 +117,7 @@ public class SpanFunction extends ImplementorUDF {
         return Expressions.call(
             SpanFunction.class,
             "evalNative",
-            Expressions.convert_(field, Object.class),
+            Expressions.convert_(Expressions.box(field), Object.class),
             Expressions.convert_(interval, int.class),
             translatedOperands.get(2),
             Expressions.constant(fieldType.getSqlTypeName().name()));

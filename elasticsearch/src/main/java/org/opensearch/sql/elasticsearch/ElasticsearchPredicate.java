@@ -80,8 +80,14 @@ final class ElasticsearchPredicate {
     Field field = fields.get(ref.getIndex());
     // An analyzed term is not SQL string equality. Keep such predicates in the shared engine.
     if (!field.exact() || field.name().equals("_score")) return null;
-    if (!Set.of(SqlKind.EQUALS, SqlKind.NOT_EQUALS, SqlKind.LESS_THAN, SqlKind.LESS_THAN_OR_EQUAL,
-        SqlKind.GREATER_THAN, SqlKind.GREATER_THAN_OR_EQUAL).contains(kind)) return null;
+    if (!Set.of(
+            SqlKind.EQUALS,
+            SqlKind.NOT_EQUALS,
+            SqlKind.LESS_THAN,
+            SqlKind.LESS_THAN_OR_EQUAL,
+            SqlKind.GREATER_THAN,
+            SqlKind.GREATER_THAN_OR_EQUAL)
+        .contains(kind)) return null;
     Object value = literal(literal);
     if (value == null) return Map.of("match_none", Map.of());
     return switch (kind) {

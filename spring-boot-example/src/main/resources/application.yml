@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: unified-query-example
+  main:
+    web-application-type: none
+    banner-mode: "off"
+
+logging:
+  level:
+    root: WARN
+
+unified-query:
+  default-data-source: logs
+  data-sources:
+    logs:
+      type: elasticsearch
+      url: ${ES_URL:http://192.168.100.212:9200}
+      username: ${ES_USER:elastic}
+      password: ${ES_PASSWORD:Elastic_Q347z5}
+    analytics:
+      type: clickhouse
+      url: ${CLICKHOUSE_JDBC_URL:jdbc:clickhouse://192.168.100.212:18123/default}
+      username: ${CLICKHOUSE_USER:admin}
+      password: ${CLICKHOUSE_PASSWORD:CKPass1$}
+      database: ${CLICKHOUSE_DATABASE:default}

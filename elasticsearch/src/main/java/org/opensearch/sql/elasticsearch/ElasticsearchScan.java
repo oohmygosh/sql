@@ -237,8 +237,11 @@ public final class ElasticsearchScan extends org.apache.calcite.rel.core.TableSc
           List<org.apache.calcite.rex.RexNode> remaining = new ArrayList<>();
           for (var condition :
               org.apache.calcite.plan.RelOptUtil.conjunctions(filter.getCondition())) {
-            var predicate = ElasticsearchPredicate.translate(
-                org.apache.calcite.rex.RexUtil.expandSearch(scan.getCluster().getRexBuilder(), null, condition), scan.fields);
+            var predicate =
+                ElasticsearchPredicate.translate(
+                    org.apache.calcite.rex.RexUtil.expandSearch(
+                        scan.getCluster().getRexBuilder(), null, condition),
+                    scan.fields);
             if (predicate == null) remaining.add(condition);
             else accepted.add(predicate);
           }

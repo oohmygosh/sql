@@ -8,5 +8,29 @@ dependencies {
     implementation project(':spring-boot-starter')
     implementation project(':elasticsearch')
     implementation project(':clickhouse')
+    testImplementation('org.springframework.boot:spring-boot-starter-test:3.5.9') {
+        // The engine already supplies org.json; avoid a second JSONObject implementation.
+        exclude group: 'com.vaadin.external.google', module: 'android-json'
+    }
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.12.2'
 }
 application { mainClass = 'org.opensearch.sql.example.QueryApplication' }
+
+// Spring's spring-jcl supplies the Commons Logging API used by the backend clients.
+configurations.configureEach {
+    exclude group: 'commons-logging', module: 'commons-logging'
+}
+
+test {
+    useJUnitPlatform()
+    def liveConfigured = providers.environmentVariable('ES_PASSWORD').isPresent()
+            && providers.environmentVariable('CLICKHOUSE_PASSWORD').isPresent()
+    inputs.property('liveDataSourcesConfigured', liveConfigured)
+    // External data can change independently of the build inputs.
+    outputs.upToDateWhen { !liveConfigured }
+    outputs.cacheIf { !liveConfigured }
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        exceptionFormat 'full'
+    }
+}

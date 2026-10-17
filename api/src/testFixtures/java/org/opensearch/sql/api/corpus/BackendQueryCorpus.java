@@ -61,7 +61,7 @@ public final class BackendQueryCorpus {
     null
   };
   private static final String[] USERS = {
-    "alice", "bob", "carol", "dave", "alice", "eve", "bob", "frank", "alice", "eve", "Grace", "汉字"
+    "alice", "bob", "carol", "dave", "alice", "éve", "bob", "frank", "alice", "éve", "Grace", "汉字🙂"
   };
   private static final Integer[] STATUS = {
     200, 500, 200, 404, 500, 200, 404, 200, 500, 200, 404, 200
@@ -88,6 +88,7 @@ public final class BackendQueryCorpus {
     public String id;
     public QueryType language;
     public String family;
+    public String reason;
     public String query;
     public boolean ordered;
     public List<Map<String, Object>> expected;
@@ -99,7 +100,15 @@ public final class BackendQueryCorpus {
   }
 
   public static List<QueryCase> cases() {
-    try (var input = BackendQueryCorpus.class.getResourceAsStream("/corpus/backend-queries.json")) {
+    return loadCases("backend-queries.json");
+  }
+
+  public static List<QueryCase> grammarBoundaries() {
+    return loadCases("grammar-boundaries.json");
+  }
+
+  private static List<QueryCase> loadCases(String name) {
+    try (var input = BackendQueryCorpus.class.getResourceAsStream("/corpus/" + name)) {
       if (input == null) throw new IllegalStateException("Missing query corpus");
       return Arrays.asList(
           JSON.fromJson(new InputStreamReader(input, StandardCharsets.UTF_8), QueryCase[].class));
@@ -285,6 +294,39 @@ public final class BackendQueryCorpus {
           query.id + " [" + observation.get("stage") + "] " + query.query, error);
     } finally {
       observation.put("milliseconds", (System.nanoTime() - started) / 1000000L);
+      observations.add(observation);
+    }
+  }
+
+  public void verifyUnsupported(
+      QueryCase query, UnifiedQueryService remote, String events, String departments) {
+    Map<String, Object> observation = new LinkedHashMap<>();
+    observation.put("id", query.id);
+    observation.put("language", query.language);
+    observation.put("family", query.family);
+    observation.put("query", query.query);
+    observation.put("reason", query.reason);
+    try {
+      for (boolean local : List.of(true, false)) {
+        observation.put("stage", local ? "reference" : "remote");
+        try {
+          (local ? reference : remote)
+              .execute(
+                  query.language,
+                  render(query, local ? "events" : events, local ? "departments" : departments));
+          throw new AssertionError(
+              "Previously unsupported grammar now executes; update the capability boundary: "
+                  + query.id);
+        } catch (org.opensearch.sql.common.antlr.SyntaxCheckException expected) {
+          // These are explicitly catalogued grammar boundaries, not skipped positive cases.
+        }
+      }
+      observation.put("status", "unsupported-confirmed");
+    } catch (Throwable error) {
+      observation.put("status", "failed");
+      observation.put("rootCause", error.toString());
+      throw error;
+    } finally {
       observations.add(observation);
     }
   }

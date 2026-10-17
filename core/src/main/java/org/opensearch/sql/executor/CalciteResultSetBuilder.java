@@ -10,10 +10,12 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TimeZone;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.sql.type.SqlTypeName;
@@ -31,14 +33,14 @@ import org.opensearch.sql.executor.ExecutionEngine.Schema.Column;
 
 /** Shared result conversion, including PPL post-processing. */
 public class CalciteResultSetBuilder {
-  private final boolean preserveExactNumbers;
+  private final boolean preserveNativeTypes;
 
   public CalciteResultSetBuilder() {
     this(false);
   }
 
-  public CalciteResultSetBuilder(boolean preserveExactNumbers) {
-    this.preserveExactNumbers = preserveExactNumbers;
+  public CalciteResultSetBuilder(boolean preserveNativeTypes) {
+    this.preserveNativeTypes = preserveNativeTypes;
   }
 
   protected Object convertScalar(Object value, RelDataType type) throws SQLException {
@@ -58,9 +60,9 @@ public class CalciteResultSetBuilder {
     if (value == null) {
       return null;
     }
-    if (preserveExactNumbers && value instanceof java.math.BigDecimal decimal)
+    if (preserveNativeTypes && value instanceof java.math.BigDecimal decimal)
       return new org.opensearch.sql.data.model.ExprDecimalValue(decimal);
-    if (preserveExactNumbers && value instanceof java.math.BigInteger integer)
+    if (preserveNativeTypes && value instanceof java.math.BigInteger integer)
       return new org.opensearch.sql.data.model.ExprDecimalValue(new java.math.BigDecimal(integer));
     if (value instanceof java.sql.Array array) {
       try {
@@ -112,13 +114,17 @@ public class CalciteResultSetBuilder {
     List<RelDataType> fieldTypes =
         rowTypes.getFieldList().stream().map(RelDataTypeField::getType).toList();
     List<ExprValue> values = new ArrayList<>();
+    var utcCalendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
     // Iterate through the ResultSet
     while (resultSet.next() && (querySizeLimit == null || values.size() < querySizeLimit)) {
       Map<String, ExprValue> row = new LinkedHashMap<String, ExprValue>();
       // Loop through each column
       for (int i = 1; i <= columnCount; i++) {
         String columnName = metaData.getColumnName(i);
-        Object value = resultSet.getObject(i);
+        Object value =
+            preserveNativeTypes && fieldTypes.get(i - 1).getSqlTypeName() == SqlTypeName.TIMESTAMP
+                ? resultSet.getTimestamp(i, utcCalendar)
+                : resultSet.getObject(i);
         Object converted = processValue(value, fieldTypes.get(i - 1));
         ExprValue exprValue = ExprValueUtils.fromObjectValue(converted);
         row.put(columnName, exprValue);

@@ -34,21 +34,36 @@ final class ClickHouseConvention extends JdbcConvention {
   private static boolean supported(org.apache.calcite.rex.RexNode node) {
     if (node instanceof org.apache.calcite.rex.RexOver) return false;
     if (!(node instanceof org.apache.calcite.rex.RexCall call)) return true;
-    return QueryClickHouseDialect.INSTANCE.supportsFunction(call.getOperator(),call.getType(),
-        call.getOperands().stream().map(org.apache.calcite.rex.RexNode::getType).toList())
+    return QueryClickHouseDialect.INSTANCE.supportsFunction(
+            call.getOperator(),
+            call.getType(),
+            call.getOperands().stream().map(org.apache.calcite.rex.RexNode::getType).toList())
         && call.getOperands().stream().allMatch(ClickHouseConvention::supported);
   }
+
   private static final class ProjectRule extends JdbcRules.JdbcProjectRule {
     ProjectRule(JdbcConvention convention) {
-      super(Config.INSTANCE.withConversion(org.apache.calcite.rel.core.Project.class,
-          p -> !p.containsOver() && p.getProjects().stream().allMatch(ClickHouseConvention::supported),
-          Convention.NONE,convention,"ClickHouseProjectRule"));
+      super(
+          Config.INSTANCE.withConversion(
+              org.apache.calcite.rel.core.Project.class,
+              p ->
+                  !p.containsOver()
+                      && p.getProjects().stream().allMatch(ClickHouseConvention::supported),
+              Convention.NONE,
+              convention,
+              "ClickHouseProjectRule"));
     }
   }
+
   private static final class FilterRule extends JdbcRules.JdbcFilterRule {
     FilterRule(JdbcConvention convention) {
-      super(Config.INSTANCE.withConversion(org.apache.calcite.rel.core.Filter.class,
-          f -> supported(f.getCondition()),Convention.NONE,convention,"ClickHouseFilterRule"));
+      super(
+          Config.INSTANCE.withConversion(
+              org.apache.calcite.rel.core.Filter.class,
+              f -> supported(f.getCondition()),
+              Convention.NONE,
+              convention,
+              "ClickHouseFilterRule"));
     }
   }
 

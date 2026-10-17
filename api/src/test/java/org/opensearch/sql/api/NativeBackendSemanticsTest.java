@@ -80,4 +80,32 @@ public class NativeBackendSemanticsTest {
                 + " | bin ts span=2h] | stats count() as n");
     assertEquals(24L, joined.getResults().getFirst().tupleValue().get("n").longValue().longValue());
   }
+
+  @Test
+  public void constantProjectionPreservesGeneratedRowMultiplicity() {
+    var result =
+        BackendQueryCorpus.referenceService()
+            .execute(QueryType.PPL, "makeresults count=3 | eval n=1 | stats count() as total");
+    assertEquals(
+        3L, result.getResults().getFirst().tupleValue().get("total").longValue().longValue());
+  }
+
+  @Test
+  public void currentTimestampUsesCalciteMilliseconds() {
+    Instant before = Instant.now().minusSeconds(1);
+    var result =
+        BackendQueryCorpus.referenceService()
+            .execute(QueryType.PPL, "makeresults count=1 | fields @timestamp");
+    Instant actual = result.getResults().getFirst().tupleValue().get("@timestamp").timestampValue();
+    assertTrue(
+        "current timestamp=" + actual,
+        !actual.isBefore(before) && !actual.isAfter(Instant.now().plusSeconds(1)));
+    var utc =
+        BackendQueryCorpus.referenceService()
+            .execute(QueryType.PPL, "makeresults count=1 | eval u=utc_timestamp() | fields u");
+    Instant utcValue = utc.getResults().getFirst().tupleValue().get("u").timestampValue();
+    assertTrue(
+        "UTC timestamp=" + utcValue,
+        !utcValue.isBefore(before) && !utcValue.isAfter(Instant.now().plusSeconds(1)));
+  }
 }

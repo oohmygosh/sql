@@ -70,7 +70,7 @@ unified-query:
 
 `unified-query.settings` accepts existing engine setting names. No new query timeouts, row caps, scan quotas, memory limits, rate limits or execution modes are introduced. Existing `UnifiedQueryContext`/`SysLimit` defaults still apply, including the existing output size setting. Transport page size and PIT renewal are internal pagination mechanics, not total-result limits.
 
-The ClickHouse URL constructor sets `join_use_nulls=1` and `join_default_strictness=ALL` to preserve SQL outer-join/duplicate-row semantics. An externally supplied JDBC DataSource must use those semantics too. This does not modify server-global settings. JDBC properties can be passed under the data source's `properties` map. OpenSearch `properties` are interpreted as its existing cluster setting names.
+The ClickHouse URL constructor sets `join_use_nulls=1`, `join_default_strictness=ALL`, and `union_default_mode=DISTINCT` to preserve SQL outer-join/duplicate-row semantics. An externally supplied JDBC DataSource must use those semantics too. This does not modify server-global settings. JDBC properties can be passed under the data source's `properties` map. OpenSearch `properties` are interpreted as its existing cluster setting names.
 
 ## Querying
 
@@ -133,3 +133,39 @@ java -jar spring-boot-example/build/libs/spring-boot-example-3.10.0.0-SNAPSHOT.j
 ```
 
 The example exposes no HTTP endpoint and closes its Spring context after the query. Spring Boot host applications manage their normal application lifecycle independently.
+
+## Expanded SQL/PPL result corpus
+
+`ElasticsearchCorpusTest` and `ClickHouseCorpusTest` share the query catalogue in
+`api/src/testFixtures/resources/corpus/backend-queries.json`. The catalogue currently has
+128 positive queries (51 SQL, 77 PPL), including 16 multi-stage combinations. Both backends
+use isolated randomly named event and lookup tables/indices with null/missing values,
+duplicates, accented text, Chinese/emoji, arrays, JSON and UTC timestamps.
+
+Every positive case compares actual rows against a separate in-memory Calcite scan backend.
+Deterministically ordered queries compare row order too; unordered results compare multisets,
+including duplicate counts. Numbers are compared canonically (floating values at 12 significant
+digits); strings remain strings. Important counts, empty aggregates, pagination and CROSS JOIN
+also have explicit golden results. `NativeBackendSemanticsTest` independently checks the shared
+temporal behavior, UTC instants, joins and generated row multiplicity so shared-engine defects
+cannot be hidden by differential comparison alone.
+
+The five cases in `grammar-boundaries.json` are negative capability checks, reported as
+`unsupported-confirmed`, not successful queries or skipped tests. They document the current
+SQL V2 frontend's COALESCE / explicit ROWS-frame limitations and PPL's direct function grouping /
+MVCOUNT limitations, together with supported alternatives. Platform-specific ML/AD/REST commands
+and cross-source federation are not counted as covered by the portable query corpus.
+
+Run the expanded matrix against the configured test services with the same URL/credential
+environment variables used by the integration tests:
+
+```sh
+./gradlew :elasticsearch:test --tests '*ElasticsearchCorpusTest' \
+          :clickhouse:test --tests '*ClickHouseCorpusTest'
+```
+
+Per-case observations (query, category, status, native SQL when available, timing and diagnostics)
+are written to `elasticsearch/build/reports/corpus/elasticsearch.json` and
+`clickhouse/build/reports/corpus/clickhouse.json`. Fixture creation and deletion are outside the
+query API, and cleanup runs even when a case fails. Credentials are read only from environment
+variables and are not included in the corpus or reports.

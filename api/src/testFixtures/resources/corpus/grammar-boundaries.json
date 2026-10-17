@@ -1,32 +1,37 @@
 [
   {
-    "id": "sql_case_coalesce",
+    "id": "sql_coalesce_boundary",
     "language": "SQL",
     "query": "SELECT id,CASE WHEN status=200 THEN 'ok' ELSE 'bad' END AS state,coalesce(amount,0) AS value FROM ${events} ORDER BY id",
-    "reason": "COALESCE is not in the SQL V2 function grammar; IFNULL is supported."
+    "reason": "COALESCE is not in the SQL V2 function grammar; IFNULL is supported.",
+    "family": "grammar-boundary"
   },
   {
-    "id": "sql_running_sum",
+    "id": "sql_unbounded_frame_boundary",
     "language": "SQL",
     "query": "SELECT id,sum(amount) OVER(PARTITION BY team ORDER BY id ROWS UNBOUNDED PRECEDING) AS total FROM ${events} ORDER BY id",
-    "reason": "SQL V2 overClause has no explicit frame clause; default frame is supported."
+    "reason": "SQL V2 overClause has no explicit frame clause; default frame is supported.",
+    "family": "grammar-boundary"
   },
   {
-    "id": "sql_moving_sum",
+    "id": "sql_bounded_frame_boundary",
     "language": "SQL",
     "query": "SELECT id,sum(amount) OVER(ORDER BY id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS total FROM ${events} ORDER BY id",
-    "reason": "SQL V2 overClause has no explicit frame clause; PPL streamstats covers bounded windows."
+    "reason": "SQL V2 overClause has no explicit frame clause; PPL streamstats covers bounded windows.",
+    "family": "grammar-boundary"
   },
   {
-    "id": "ppl_stats_expression",
+    "id": "ppl_group_expression_boundary",
     "language": "PPL",
     "query": "source=${events} | stats sum(amount) as total by lower(username) | sort `lower(username)`",
-    "reason": "PPL stats grouping accepts fields/span; calculate other expressions with eval first."
+    "reason": "PPL stats grouping accepts fields/span; calculate other expressions with eval first.",
+    "family": "grammar-boundary"
   },
   {
-    "id": "ppl_array_functions",
+    "id": "ppl_mvcount_boundary",
     "language": "PPL",
     "query": "source=${events} | eval size=mvcount(tags),joined=mvjoin(tags,',') | fields id,size,joined | sort id",
-    "reason": "The supported array length function is array_length, not mvcount."
+    "reason": "The supported array length function is array_length, not mvcount.",
+    "family": "grammar-boundary"
   }
 ]
