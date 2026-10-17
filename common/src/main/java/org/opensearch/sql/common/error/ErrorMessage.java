@@ -1,0 +1,100 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+package org.opensearch.sql.common.error;
+
+import lombok.Getter;
+import org.json.JSONObject;
+
+/** Error Message. */
+public class ErrorMessage {
+
+  protected final Throwable exception;
+
+  private final int status;
+
+  @Getter private final String type;
+
+  @Getter private final String reason;
+
+  @Getter private final String details;
+
+  /** Error Message Constructor. */
+  public ErrorMessage(Throwable exception, int status) {
+    this.exception = exception;
+    this.status = status;
+
+    this.type = fetchType();
+    this.reason = fetchReason();
+    this.details = fetchDetails();
+  }
+
+  private String fetchType() {
+    return exception.getClass().getSimpleName();
+  }
+
+  protected String fetchReason() {
+    // Read through ErrorReport when we have one, so the formatters that publish this field agree
+    // with getErrorAsJson instead of falling back to a fixed string.
+    if (exception instanceof ErrorReport errorReport) {
+      String reason = errorReport.getUserFacingMessage();
+      if (reason != null) {
+        return reason;
+      }
+    }
+    return status == 400 ? "Invalid Query" : "There was internal problem at backend";
+  }
+
+  protected String fetchDetails() {
+    // Some exception prints internal information (full class name) which is security concern.
+    // Read through ErrorReport when we have one, since its own message is the plan. This field is
+    // what JdbcResponseFormatter and VisualizationResponseFormatter publish via getDetails().
+    if (exception instanceof ErrorReport errorReport) {
+      return emptyStringIfNull(errorReport.getUserFacingDetails());
+    }
+    return emptyStringIfNull(exception.getLocalizedMessage());
+  }
+
+  private String emptyStringIfNull(String str) {
+    return str != null ? str : "";
+  }
+
+  @Override
+  public String toString() {
+    JSONObject output = new JSONObject();
+
+    output.put("status", status);
+    output.put("error", getErrorAsJson());
+
+    return output.toString(2);
+  }
+
+  /**
+   * Returns the structured error JSON that normally sits under {@code "error"} in the HTTP body.
+   * Exposed so async callers can embed the same object alongside a job-state field without the
+   * outer {@code "status"} HTTP envelope produced by {@link #toString()}.
+   */
+  public JSONObject getErrorAsJson() {
+    if (exception instanceof ErrorReport errorReport) {
+      JSONObject errorJson = new JSONObject(errorReport.toJsonMap());
+      // Add 'reason' field for backward compatibility with existing clients
+      // Use the underlying exception message as 'reason' (broad error description)
+      // while 'details' contains the more precise handwritten message
+      if (!errorJson.has("reason")) {
+        String reasonMessage = errorReport.getUserFacingMessage();
+        if (reasonMessage != null) {
+          errorJson.put("reason", reasonMessage);
+        }
+      }
+      return errorJson;
+    }
+
+    JSONObject errorJson = new JSONObject();
+    errorJson.put("type", type);
+    errorJson.put("reason", reason);
+    errorJson.put("details", details);
+    return errorJson;
+  }
+}

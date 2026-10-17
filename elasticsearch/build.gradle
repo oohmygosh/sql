@@ -1,0 +1,26 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+plugins {
+    id 'java-library'
+    id 'io.freefair.lombok'
+}
+dependencies {
+    api project(':core')
+    testImplementation project(':api')
+    testImplementation testFixtures(project(':api'))
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.9.3'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+test { useJUnitPlatform() }
+dependencies {
+    api 'org.elasticsearch.client:elasticsearch-rest-client:8.19.0'
+}
+
+// A live database can change independently of Gradle inputs. Do not reuse cached integration results.
+test {
+    outputs.upToDateWhen { System.getenv('ELASTICSEARCH_TEST_URL') == null }
+    outputs.cacheIf { System.getenv('ELASTICSEARCH_TEST_URL') == null }
+}

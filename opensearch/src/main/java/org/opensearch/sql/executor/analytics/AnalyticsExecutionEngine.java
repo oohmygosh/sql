@@ -64,6 +64,10 @@ public class AnalyticsExecutionEngine implements ExecutionEngine {
 
   public AnalyticsExecutionEngine(QueryPlanExecutor<RelNode, Iterable<Object[]>> planExecutor) {
     this.planExecutor = planExecutor;
+    OpenSearchTypeFactory.registerExternalType(IpType.class, ExprCoreType.IP);
+    OpenSearchTypeFactory.registerExternalType(BinaryType.class, ExprCoreType.BINARY);
+    OpenSearchTypeFactory.registerExternalType(DateOnlyType.class, ExprCoreType.DATE);
+    OpenSearchTypeFactory.registerExternalType(TimeOnlyType.class, ExprCoreType.TIME);
   }
 
   /** Not supported. Analytics queries use the RelNode path exclusively. */

@@ -14,11 +14,11 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.opensearch.sql.common.antlr.SyntaxCheckException;
+import org.opensearch.sql.common.error.ErrorMessage;
+import org.opensearch.sql.common.error.ErrorMessageFactory;
 import org.opensearch.sql.data.type.ExprType;
 import org.opensearch.sql.exception.QueryEngineException;
 import org.opensearch.sql.executor.ExecutionEngine;
-import org.opensearch.sql.opensearch.response.error.ErrorMessage;
-import org.opensearch.sql.opensearch.response.error.ErrorMessageFactory;
 import org.opensearch.sql.protocol.response.QueryResult;
 
 /**

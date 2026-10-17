@@ -1,0 +1,19 @@
+/*
+ * Copyright OpenSearch Contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+plugins { id 'java-library'; id 'io.freefair.lombok' }
+dependencies {
+    api project(':api')
+    api 'org.springframework.boot:spring-boot-autoconfigure:3.5.9'
+    compileOnly project(':opensearch')
+    compileOnly project(':elasticsearch')
+    compileOnly project(':clickhouse')
+    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor:3.5.9'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.12.2'
+    testImplementation project(':elasticsearch')
+    testImplementation project(':clickhouse')
+    testImplementation 'org.springframework.boot:spring-boot-starter-test:3.5.9'
+}
+test { useJUnitPlatform() }

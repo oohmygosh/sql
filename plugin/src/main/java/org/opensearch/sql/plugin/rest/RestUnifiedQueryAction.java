@@ -443,8 +443,8 @@ public class RestUnifiedQueryAction {
         LangSpec langSpec = queryType == QueryType.PPL ? PPL_SPEC : LangSpec.SQL_SPEC;
 
         // Set the engine profile as the plan so the formatter serializes it in one pass.
-        if (response.getProfile() != null) {
-          profileCtx.setEnginePlan(toJsonElement(response.getProfile()));
+        if (response.getProfile() instanceof QueryProfile profile) {
+          profileCtx.setEnginePlan(toJsonElement(profile));
         }
 
         String result =

@@ -31,6 +31,8 @@ plugins {
 }
 
 dependencies {
+    compileOnly 'org.opensearch.sandbox:analytics-api:3.8.0-SNAPSHOT'
+    testImplementation 'org.opensearch.sandbox:analytics-api:3.8.0-SNAPSHOT'
     api project(':core')
     api project(':ppl-rest-spi')
     api group: 'org.opensearch', name: 'opensearch', version: "${opensearch_version}"

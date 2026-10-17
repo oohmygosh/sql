@@ -95,6 +95,14 @@ public class OpenSearchPluginModule extends AbstractModule {
   }
 
   @Provides
+  @Singleton
+  public org.opensearch.sql.backend.QueryBackend queryBackend(
+      StorageEngine storage, ExecutionEngine engine) {
+    return new org.opensearch.sql.opensearch.backend.OpenSearchQueryBackend(
+        "opensearch", storage, engine);
+  }
+
+  @Provides
   public ResourceMonitor resourceMonitor(Settings settings) {
     return new OpenSearchResourceMonitor(settings, new OpenSearchMemoryHealthy(settings));
   }

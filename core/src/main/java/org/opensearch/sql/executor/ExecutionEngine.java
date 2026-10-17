@@ -13,7 +13,6 @@ import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.ToString;
 import org.apache.calcite.rel.RelNode;
-import org.opensearch.analytics.exec.profile.QueryProfile;
 import org.opensearch.sql.ast.statement.ExplainMode;
 import org.opensearch.sql.calcite.CalcitePlanContext;
 import org.opensearch.sql.common.response.ResponseListener;
@@ -92,7 +91,10 @@ public interface ExecutionEngine {
     private final Schema schema;
     private final List<ExprValue> results;
     private final Cursor cursor;
-    @lombok.Setter private QueryProfile profile;
+
+    /** Backend profile payload; serialized by the hosting adapter. */
+    @lombok.Setter private Object profile;
+
     @lombok.Setter private Throwable error;
 
     /** Non-fatal notices attached to a successful result; empty for a plain success. */

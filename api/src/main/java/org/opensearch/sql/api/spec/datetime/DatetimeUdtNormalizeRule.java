@@ -27,6 +27,54 @@ import org.opensearch.sql.api.spec.datetime.DatetimeExtension.UdtMapping;
 class DatetimeUdtNormalizeRule extends RelHomogeneousShuttle {
 
   @Override
+  protected RelNode visitChild(RelNode parent, int index, RelNode child) {
+    stack.push(parent);
+    try {
+      RelNode updated = child.accept(this);
+      if (updated == child) return parent;
+      var inputs = new java.util.ArrayList<>(parent.getInputs());
+      inputs.set(index, updated);
+      var fields =
+          inputs.stream().flatMap(input -> input.getRowType().getFieldList().stream()).toList();
+      RexShuttle references =
+          new RexShuttle() {
+            @Override
+            public RexNode visitInputRef(org.apache.calcite.rex.RexInputRef ref) {
+              var type = fields.get(ref.getIndex()).getType();
+              return ref.getType().equals(type)
+                  ? ref
+                  : new org.apache.calcite.rex.RexInputRef(ref.getIndex(), type);
+            }
+          };
+      if (parent instanceof org.apache.calcite.rel.core.Project project) {
+        var expressions =
+            project.getProjects().stream().map(expr -> expr.accept(references)).toList();
+        var type =
+            parent
+                .getCluster()
+                .getTypeFactory()
+                .createStructType(
+                    expressions.stream().map(RexNode::getType).toList(),
+                    project.getRowType().getFieldNames());
+        return project.copy(project.getTraitSet(), updated, expressions, type);
+      }
+      if (parent instanceof org.apache.calcite.rel.core.Filter filter)
+        return filter.copy(filter.getTraitSet(), updated, filter.getCondition().accept(references));
+      if (parent instanceof org.apache.calcite.rel.core.Join join)
+        return join.copy(
+            join.getTraitSet(),
+            join.getCondition().accept(references),
+            inputs.get(0),
+            inputs.get(1),
+            join.getJoinType(),
+            join.isSemiJoinDone());
+      return parent.copy(parent.getTraitSet(), inputs);
+    } finally {
+      stack.pop();
+    }
+  }
+
+  @Override
   public RelNode visit(RelNode other) {
     RelNode visited = super.visit(other);
     RexBuilder rexBuilder = visited.getCluster().getRexBuilder();

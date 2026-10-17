@@ -36,8 +36,8 @@ dependencies {
     implementation group: 'tools.jackson.dataformat', name: 'jackson-dataformat-cbor', version: "${versions.jackson3}"
     implementation 'com.google.code.gson:gson:2.8.9'
     implementation project(':core')
-    implementation project(':opensearch')
 
+    testImplementation project(':opensearch')
     testImplementation('org.junit.jupiter:junit-jupiter:5.9.3')
     testImplementation group: 'org.hamcrest', name: 'hamcrest-library', version: "${hamcrest_version}"
     testImplementation group: 'org.mockito', name: 'mockito-core', version: "${mockito_version}"

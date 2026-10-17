@@ -140,6 +140,9 @@ public class SqlV2QueryParser implements UnifiedQueryParser<UnresolvedPlan> {
       UnresolvedPlan right = visit(ctx.relation());
       Optional<UnresolvedExpression> condition =
           Optional.ofNullable(ctx.expression()).map(this::visitAstExpression);
+      if (joinType == JoinType.CROSS && condition.isEmpty()) {
+        condition = Optional.of(org.opensearch.sql.ast.expression.Literal.TRUE);
+      }
       return join(right, joinType, condition);
     }
 

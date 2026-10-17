@@ -8,31 +8,24 @@ package org.opensearch.sql.opensearch.executor;
 import com.google.common.base.Suppliers;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
-import org.apache.calcite.avatica.util.StructImpl;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.RelRoot;
 import org.apache.calcite.rel.externalize.RelJsonWriter;
 import org.apache.calcite.rel.type.RelDataType;
-import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.runtime.Hook;
 import org.apache.calcite.sql.SqlExplainLevel;
 import org.apache.calcite.sql.SqlOperator;
 import org.apache.calcite.sql.SqlOperatorTable;
 import org.apache.calcite.sql.type.ReturnTypes;
-import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.util.ListSqlOperatorTable;
 import org.apache.calcite.sql.validate.SqlUserDefinedAggFunction;
 import org.apache.calcite.sql.validate.SqlUserDefinedFunction;
@@ -43,23 +36,15 @@ import org.opensearch.sql.ast.statement.ExplainMode;
 import org.opensearch.sql.calcite.CalcitePlanContext;
 import org.opensearch.sql.calcite.utils.CalciteToolsHelper;
 import org.opensearch.sql.calcite.utils.CalciteToolsHelper.OpenSearchRelRunners;
-import org.opensearch.sql.calcite.utils.OpenSearchTypeFactory;
-import org.opensearch.sql.calcite.utils.TimewrapPivot;
 import org.opensearch.sql.calcite.utils.UserDefinedFunctionUtils;
 import org.opensearch.sql.common.error.ErrorCode;
 import org.opensearch.sql.common.error.ErrorReport;
 import org.opensearch.sql.common.error.ResourceLimitExceededException;
 import org.opensearch.sql.common.response.ResponseListener;
-import org.opensearch.sql.data.model.ExprTupleValue;
 import org.opensearch.sql.data.model.ExprValue;
-import org.opensearch.sql.data.model.ExprValueUtils;
-import org.opensearch.sql.data.type.ExprCoreType;
-import org.opensearch.sql.data.type.ExprType;
 import org.opensearch.sql.executor.ExecutionContext;
 import org.opensearch.sql.executor.ExecutionEngine;
-import org.opensearch.sql.executor.ExecutionEngine.Schema.Column;
 import org.opensearch.sql.executor.Explain;
-import org.opensearch.sql.executor.Warning;
 import org.opensearch.sql.executor.pagination.PlanSerializer;
 import org.opensearch.sql.expression.function.BuiltinFunctionName;
 import org.opensearch.sql.expression.function.PPLFuncImpTable;
@@ -330,7 +315,8 @@ public class OpenSearchExecutionEngine implements ExecutionEngine {
       RelNode rel, CalcitePlanContext context, ResponseListener<QueryResponse> listener) {
     client.schedule(
         () -> {
-          try (PreparedStatement statement = OpenSearchRelRunners.run(context, rel)) {
+          try (PreparedStatement statement =
+              org.opensearch.sql.executor.CalciteExecutionEngine.prepare(rel, context)) {
             QueryResponse response;
             try (ProfileScope executePhase = ProfileScope.open(MetricName.EXECUTE)) {
               ResultSet result = statement.executeQuery();
@@ -345,15 +331,19 @@ public class OpenSearchExecutionEngine implements ExecutionEngine {
               ResourceLimitExceededException pitException =
                   new ResourceLimitExceededException(
                       "Too many open Point-In-Time (PIT) contexts on this node.", e);
-              throw ErrorReport.wrap(pitException)
-                  .code(ErrorCode.RESOURCE_LIMIT_EXCEEDED)
-                  .details(
-                      "This query opened a Point-In-Time (PIT) context on each shard and reached"
-                          + " the limit set by [search.max_open_pit_context]. Increase that"
-                          + " setting.")
-                  .build();
+              listener.onFailure(
+                  ErrorReport.wrap(pitException)
+                      .code(ErrorCode.RESOURCE_LIMIT_EXCEEDED)
+                      .details(
+                          "This query opened a Point-In-Time (PIT) context on each shard and"
+                              + " reached the limit set by [search.max_open_pit_context]. Increase"
+                              + " that setting.")
+                      .build());
+              return;
             }
-            throw new RuntimeException(e);
+            listener.onFailure(e);
+          } catch (Exception e) {
+            listener.onFailure(e);
           }
         });
   }
@@ -380,122 +370,16 @@ public class OpenSearchExecutionEngine implements ExecutionEngine {
     return false;
   }
 
-  /**
-   * Process values recursively, handling geo points, nested maps, structs and arrays. When a {@link
-   * RelDataType} is provided, struct values (StructImpl) are converted to Maps keyed by field
-   * names, preserving field-name information in the JSON output.
-   *
-   * @param value The raw value from the JDBC result set
-   * @param type The Calcite type metadata for this value, or null if unavailable
-   */
-  @SuppressWarnings("unchecked")
-  private static Object processValue(Object value, RelDataType type) throws SQLException {
-    if (value == null) {
-      return null;
-    }
-    if (value instanceof Point point) {
-      return new OpenSearchExprGeoPointValue(point.getY(), point.getX());
-    }
-    if (value instanceof Map) {
-      Map<String, Object> map = (Map<String, Object>) value;
-      Map<String, Object> convertedMap = new HashMap<>();
-      for (Map.Entry<String, Object> entry : map.entrySet()) {
-        convertedMap.put(entry.getKey(), processValue(entry.getValue(), null));
+  private QueryResponse buildResultSet(ResultSet result, RelDataType rowTypes, Integer limit)
+      throws SQLException {
+    return new org.opensearch.sql.executor.CalciteResultSetBuilder() {
+      @Override
+      protected Object convertScalar(Object value, RelDataType type) {
+        return value instanceof Point point
+            ? new OpenSearchExprGeoPointValue(point.getY(), point.getX())
+            : value;
       }
-      return convertedMap;
-    }
-    if (value instanceof StructImpl structImpl) {
-      Object[] attrs = structImpl.getAttributes();
-      if (type != null && type.getSqlTypeName() == SqlTypeName.ROW) {
-        List<RelDataTypeField> fields = type.getFieldList();
-        Map<String, Object> map = new LinkedHashMap<>();
-        for (int i = 0; i < fields.size() && i < attrs.length; i++) {
-          map.put(fields.get(i).getName(), processValue(attrs[i], fields.get(i).getType()));
-        }
-        return map;
-      }
-      return Arrays.asList(attrs);
-    }
-    if (value instanceof List) {
-      List<Object> list = (List<Object>) value;
-      RelDataType componentType =
-          (type != null && type.getComponentType() != null) ? type.getComponentType() : null;
-      List<Object> convertedList = new ArrayList<>();
-      for (Object item : list) {
-        convertedList.add(processValue(item, componentType));
-      }
-      return convertedList;
-    }
-    // For other types, return as-is
-    return value;
-  }
-
-  private QueryResponse buildResultSet(
-      ResultSet resultSet, RelDataType rowTypes, Integer querySizeLimit) throws SQLException {
-    // Get the ResultSet metadata to know about columns
-    ResultSetMetaData metaData = resultSet.getMetaData();
-    int columnCount = metaData.getColumnCount();
-    List<RelDataType> fieldTypes =
-        rowTypes.getFieldList().stream().map(RelDataTypeField::getType).toList();
-    List<ExprValue> values = new ArrayList<>();
-    // Iterate through the ResultSet
-    while (resultSet.next() && (querySizeLimit == null || values.size() < querySizeLimit)) {
-      Map<String, ExprValue> row = new LinkedHashMap<String, ExprValue>();
-      // Loop through each column
-      for (int i = 1; i <= columnCount; i++) {
-        String columnName = metaData.getColumnName(i);
-        Object value = resultSet.getObject(columnName);
-        Object converted = processValue(value, fieldTypes.get(i - 1));
-        ExprValue exprValue = ExprValueUtils.fromObjectValue(converted);
-        row.put(columnName, exprValue);
-      }
-      values.add(ExprTupleValue.fromExprValueMap(row));
-    }
-
-    List<Column> columns = new ArrayList<>(metaData.getColumnCount());
-    for (int i = 1; i <= columnCount; ++i) {
-      String columnName = metaData.getColumnName(i);
-      RelDataType fieldType = fieldTypes.get(i - 1);
-      // TODO: Correct this after fixing issue github.com/opensearch-project/sql/issues/3751
-      //  The element type of struct and array is currently set to ANY.
-      //  We set them using the runtime type as a workaround.
-      ExprType exprType;
-      if (fieldType.getSqlTypeName() == SqlTypeName.ANY) {
-        if (!values.isEmpty()) {
-          exprType = values.getFirst().tupleValue().get(columnName).type();
-        } else {
-          // Using UNDEFINED instead of UNKNOWN to avoid throwing exception
-          exprType = ExprCoreType.UNDEFINED;
-        }
-      } else {
-        exprType = OpenSearchTypeFactory.convertRelDataTypeToExprType(fieldType);
-      }
-      columns.add(new Column(columnName, null, exprType));
-    }
-    // Drain before the timewrap block: its finally clears the same thread-local.
-    List<Warning> warnings = CalcitePlanContext.drainWarnings();
-
-    // Timewrap post-processing: pivot unpivoted rows into period columns. The pivot is shared with
-    // the analytics route (AnalyticsExecutionEngine) so both engines produce identical output.
-    if (TimewrapPivot.isTimewrap()) {
-      try {
-        TimewrapPivot.Result pivoted =
-            TimewrapPivot.pivot(
-                columns,
-                values,
-                CalcitePlanContext.timewrapUnitName.get(),
-                CalcitePlanContext.timewrapSeries.get());
-        columns = pivoted.columns();
-        values = pivoted.values();
-      } finally {
-        CalcitePlanContext.clearTimewrapSignals();
-      }
-    }
-
-    Schema schema = new Schema(columns);
-    QueryResponse response = new QueryResponse(schema, values, null);
-    response.setWarnings(warnings);
-    return response;
+    }.buildResultSet(result, rowTypes, limit);
   }
 
   /** Registers opensearch-dependent functions */

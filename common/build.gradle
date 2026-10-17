@@ -43,9 +43,10 @@ test {
 }
 
 dependencies {
+    api 'org.json:json:20231013'
     api "org.antlr:antlr4-runtime:4.13.2"
     api group: 'com.google.guava', name: 'guava', version: "${guava_version}"
-    api group: 'org.apache.logging.log4j', name: 'log4j-core', version:"${versions.log4j}"
+    api group: 'org.apache.logging.log4j', name: 'log4j-api', version:"${versions.log4j}"
     api group: 'org.apache.commons', name: 'commons-lang3', version: "${commons_lang3_version}"
     api group: 'org.apache.commons', name: 'commons-text', version: "${commons_text_version}"
     api group: 'com.squareup.okhttp3', name: 'okhttp', version: '4.12.0'

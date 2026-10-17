@@ -105,6 +105,8 @@ public class UnifiedQueryContext implements AutoCloseable {
   @Override
   public void close() throws Exception {
     QueryProfiling.clear();
+    CalcitePlanContext.clearTimewrapSignals();
+    CalcitePlanContext.skipEncoding.remove();
     if (planContext != null && planContext.connection != null) {
       planContext.connection.close();
     }
@@ -119,6 +121,8 @@ public class UnifiedQueryContext implements AutoCloseable {
   public static class Builder {
     private QueryType queryType;
     private final Map<String, Schema> catalogs = new HashMap<>();
+    private final Map<String, java.util.function.Function<SchemaPlus, Schema>> catalogFactories =
+        new HashMap<>();
     private String defaultNamespace;
     private boolean cacheMetadata = false;
     private boolean profiling = false;
@@ -188,12 +192,14 @@ public class UnifiedQueryContext implements AutoCloseable {
       return this;
     }
 
-    /**
-     * Sets the default namespace path for resolving unqualified table names.
-     *
-     * @param namespace dot-separated path (e.g., "spark_catalog.default" or "opensearch")
-     * @return this builder instance
-     */
+    /** Creates a catalog once per query, with access to its Calcite parent schema. */
+    public Builder catalogFactory(
+        String name, java.util.function.Function<SchemaPlus, Schema> factory) {
+      catalogFactories.put(name, factory);
+      return this;
+    }
+
+    /** Sets the dot-separated default namespace (for example analytics.default). */
     public Builder defaultNamespace(String namespace) {
       this.defaultNamespace = namespace;
       return this;
@@ -254,6 +260,28 @@ public class UnifiedQueryContext implements AutoCloseable {
       CalcitePlanContext planContext =
           CalcitePlanContext.create(
               buildFrameworkConfig(langSpec), SysLimit.fromSettings(settings), queryType);
+      // JDBC adapters resolve their schema from DataContext at execution time. The framework
+      // catalog and the JDBC connection must expose the same schema instances.
+      SchemaPlus root = planContext.config.getDefaultSchema();
+      while (root.getParentSchema() != null) root = root.getParentSchema();
+      try {
+        SchemaPlus executionRoot =
+            planContext
+                .connection
+                .unwrap(org.apache.calcite.jdbc.CalciteConnection.class)
+                .getRootSchema();
+        for (String name : root.getSubSchemaNames()) {
+          if (executionRoot.getSubSchema(name) == null)
+            executionRoot.add(name, CalciteSchema.from(root.getSubSchema(name)).schema);
+        }
+      } catch (java.sql.SQLException error) {
+        try {
+          planContext.connection.close();
+        } catch (java.sql.SQLException cleanup) {
+          error.addSuppressed(cleanup);
+        }
+        throw new IllegalStateException("Cannot bind the execution catalog", error);
+      }
       QueryProfiling.activate(profiling);
       return new UnifiedQueryContext(
           planContext, settings, createParser(planContext, settings), langSpec);
@@ -285,6 +313,7 @@ public class UnifiedQueryContext implements AutoCloseable {
     private FrameworkConfig buildFrameworkConfig(LanguageSpec langSpec) {
       SchemaPlus rootSchema = CalciteSchema.createRootSchema(true, cacheMetadata).plus();
       catalogs.forEach(rootSchema::add);
+      catalogFactories.forEach((name, factory) -> rootSchema.add(name, factory.apply(rootSchema)));
 
       SchemaPlus defaultSchema = findSchemaByPath(rootSchema, defaultNamespace);
       Frameworks.ConfigBuilder builder =

@@ -39,3 +39,5 @@ if (!gradle.startParameter.offline) {
     include 'integ-test'
     include 'doctest'
 }
+
+include 'elasticsearch', 'clickhouse', 'spring-boot-autoconfigure', 'spring-boot-starter', 'spring-boot-example'

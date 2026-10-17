@@ -171,6 +171,16 @@ public class ExprValueUtils {
 
   /** Construct ExprValue from Object with ExprCoreType. */
   public static ExprValue fromObjectValue(Object o, ExprType type) {
+    if (o == null) return LITERAL_NULL;
+    if (o instanceof Number number) {
+      // Native Calcite temporal values use epoch days or milliseconds, unlike VARCHAR-backed UDTs.
+      if (type == ExprCoreType.TIMESTAMP)
+        return timestampValue(Instant.ofEpochMilli(number.longValue()));
+      if (type == ExprCoreType.DATE)
+        return new ExprDateValue(java.time.LocalDate.ofEpochDay(number.longValue()));
+      if (type == ExprCoreType.TIME)
+        return new ExprTimeValue(java.time.LocalTime.ofNanoOfDay(number.longValue() * 1000000L));
+    }
     switch (type) {
       case TIMESTAMP:
         return new ExprTimestampValue((String) o);

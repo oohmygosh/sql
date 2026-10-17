@@ -113,11 +113,38 @@ public class SpanFunction extends ImplementorUDF {
                         SpanFunction.class, methodName, String.class, int.class, String.class));
         return function.getImplementor().implement(translator, call, RexImpTable.NullAs.NULL);
       }
+      if (SqlTypeUtil.isDatetime(fieldType)) {
+        return Expressions.call(
+            SpanFunction.class,
+            "evalNative",
+            Expressions.convert_(field, Object.class),
+            Expressions.convert_(interval, int.class),
+            translatedOperands.get(2),
+            Expressions.constant(fieldType.getSqlTypeName().name()));
+      }
       throw new IllegalArgumentException(
           String.format(
               "Unsupported expr type: %s",
               OpenSearchTypeFactory.convertRelDataTypeToExprType(fieldType)));
     }
+  }
+
+  public static Object evalNative(Object value, int interval, String unit, String typeName) {
+    ExprCoreType type = ExprCoreType.valueOf(typeName);
+    ExprValue expr = ExprValueUtils.fromObjectValue(value, type);
+    ExprValue width = ExprValueUtils.fromObjectValue(interval);
+    Rounding<?> rounding =
+        switch (type) {
+          case DATE -> new DateRounding(width, unit);
+          case TIME -> new TimeRounding(width, unit);
+          default -> new TimestampRounding(width, unit);
+        };
+    ExprValue result = rounding.round(expr);
+    return switch (type) {
+      case DATE -> (int) result.dateValue().toEpochDay();
+      case TIME -> (int) (result.timeValue().toNanoOfDay() / 1000000L);
+      default -> result.timestampValue().toEpochMilli();
+    };
   }
 
   @Strict

@@ -298,3 +298,7 @@ public class MySchema extends AbstractSchema {
 ## Future Work
 
 - Extend planner to generate optimized physical plans using Calcite's optimization frameworks.
+
+## Embedded backends and Spring Boot
+
+`UnifiedQueryService` selects a `QueryBackend` before planning and executes SQL/PPL through the existing Calcite pipeline. OpenSearch, Elasticsearch and ClickHouse implementations and optional Spring Boot auto-configuration are described in [the embedded backend guide](../docs/dev/embedded-query-backends.md).

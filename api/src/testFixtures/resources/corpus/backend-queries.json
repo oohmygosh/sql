@@ -1,0 +1,1047 @@
+[
+  {
+    "id": "sql_projection",
+    "language": "SQL",
+    "family": "projection",
+    "query": "SELECT id,team,amount FROM ${events} ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_aliases",
+    "language": "SQL",
+    "family": "projection",
+    "query": "SELECT id AS event_id,upper(team) AS category,id+2 AS shifted FROM ${events} ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_constant",
+    "language": "SQL",
+    "family": "projection",
+    "query": "SELECT 1 AS n FROM ${events} LIMIT 3",
+    "ordered": false,
+    "expected": [
+      {
+        "n": 1
+      },
+      {
+        "n": 1
+      },
+      {
+        "n": 1
+      }
+    ]
+  },
+  {
+    "id": "sql_no_source",
+    "language": "SQL",
+    "family": "expression",
+    "query": "SELECT 2+3 AS n",
+    "ordered": false,
+    "expected": [
+      {
+        "n": 5
+      }
+    ]
+  },
+  {
+    "id": "sql_nested_boolean",
+    "language": "SQL",
+    "family": "filter",
+    "query": "SELECT id FROM ${events} WHERE (status=200 AND amount>10) OR (status=500 AND amount IS NULL) ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_not",
+    "language": "SQL",
+    "family": "filter",
+    "query": "SELECT id FROM ${events} WHERE NOT (status=200 OR amount IS NULL) ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_in_literals",
+    "language": "SQL",
+    "family": "filter",
+    "query": "SELECT id FROM ${events} WHERE status IN (200,404) ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_not_in_null",
+    "language": "SQL",
+    "family": "null",
+    "query": "SELECT id FROM ${events} WHERE status NOT IN (200,NULL)",
+    "ordered": false,
+    "expected": []
+  },
+  {
+    "id": "sql_between",
+    "language": "SQL",
+    "family": "filter",
+    "query": "SELECT id FROM ${events} WHERE id BETWEEN 3 AND 7 ORDER BY id",
+    "ordered": true,
+    "expected": [
+      {
+        "id": 3
+      },
+      {
+        "id": 4
+      },
+      {
+        "id": 5
+      },
+      {
+        "id": 6
+      },
+      {
+        "id": 7
+      }
+    ]
+  },
+  {
+    "id": "sql_like",
+    "language": "SQL",
+    "family": "string",
+    "query": "SELECT id FROM ${events} WHERE username LIKE 'a%' ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_null_predicate",
+    "language": "SQL",
+    "family": "null",
+    "query": "SELECT id FROM ${events} WHERE amount IS NULL ORDER BY id",
+    "ordered": true,
+    "expected": [
+      {
+        "id": 2
+      },
+      {
+        "id": 5
+      }
+    ]
+  },
+  {
+    "id": "sql_null_comparison",
+    "language": "SQL",
+    "family": "null",
+    "query": "SELECT id FROM ${events} WHERE amount = NULL",
+    "ordered": false,
+    "expected": []
+  },
+  {
+    "id": "sql_case_coalesce",
+    "language": "SQL",
+    "family": "expression",
+    "query": "SELECT id,CASE WHEN status=200 THEN 'ok' ELSE 'bad' END AS state,ifnull(amount,0) AS value FROM ${events} ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_math",
+    "language": "SQL",
+    "family": "function",
+    "query": "SELECT id,abs(amount) AS magnitude,round(amount,0) AS rounded FROM ${events} ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_strings",
+    "language": "SQL",
+    "family": "function",
+    "query": "SELECT id,upper(username) AS u,lower(username) AS l,length(username) AS size FROM ${events} ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_cast",
+    "language": "SQL",
+    "family": "function",
+    "query": "SELECT id,cast(id AS STRING) AS label,cast(amount AS DOUBLE) AS amount2 FROM ${events} ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_sort_null",
+    "language": "SQL",
+    "family": "sort",
+    "query": "SELECT id,amount FROM ${events} ORDER BY amount DESC NULLS LAST,id",
+    "ordered": true
+  },
+  {
+    "id": "sql_limit_offset",
+    "language": "SQL",
+    "family": "sort",
+    "query": "SELECT id FROM ${events} ORDER BY id LIMIT 4 OFFSET 3",
+    "ordered": true,
+    "expected": [
+      {
+        "id": 4
+      },
+      {
+        "id": 5
+      },
+      {
+        "id": 6
+      },
+      {
+        "id": 7
+      }
+    ]
+  },
+  {
+    "id": "sql_limit_zero",
+    "language": "SQL",
+    "family": "sort",
+    "query": "SELECT id FROM ${events} LIMIT 0",
+    "ordered": false,
+    "expected": []
+  },
+  {
+    "id": "sql_distinct",
+    "language": "SQL",
+    "family": "aggregate",
+    "query": "SELECT DISTINCT team FROM ${events}",
+    "ordered": false
+  },
+  {
+    "id": "sql_count",
+    "language": "SQL",
+    "family": "aggregate",
+    "query": "SELECT count(*) AS total,count(amount) AS present,count(DISTINCT username) AS people FROM ${events}",
+    "ordered": false,
+    "expected": [
+      {
+        "total": 12,
+        "present": 10,
+        "people": 8
+      }
+    ]
+  },
+  {
+    "id": "sql_metrics",
+    "language": "SQL",
+    "family": "aggregate",
+    "query": "SELECT sum(amount) AS total,avg(amount) AS mean,min(amount) AS low,max(amount) AS high FROM ${events}",
+    "ordered": false,
+    "expected": [
+      {
+        "total": 131,
+        "mean": 13.1,
+        "low": -2.5,
+        "high": 40.75
+      }
+    ]
+  },
+  {
+    "id": "sql_group_nullable",
+    "language": "SQL",
+    "family": "aggregate",
+    "query": "SELECT team,count(*) AS n,sum(amount) AS total FROM ${events} GROUP BY team ORDER BY team",
+    "ordered": true
+  },
+  {
+    "id": "sql_multi_group",
+    "language": "SQL",
+    "family": "aggregate",
+    "query": "SELECT team,status,count(*) AS n FROM ${events} GROUP BY team,status ORDER BY team,status",
+    "ordered": true
+  },
+  {
+    "id": "sql_having",
+    "language": "SQL",
+    "family": "aggregate",
+    "query": "SELECT team,count(*) AS n FROM ${events} GROUP BY team HAVING count(*)>=3 ORDER BY n DESC,team",
+    "ordered": true
+  },
+  {
+    "id": "sql_group_expression",
+    "language": "SQL",
+    "family": "aggregate",
+    "query": "SELECT length(username) AS size,count(*) AS n FROM ${events} GROUP BY length(username) ORDER BY size",
+    "ordered": true
+  },
+  {
+    "id": "sql_aggregate_filter",
+    "language": "SQL",
+    "family": "aggregate",
+    "query": "SELECT count(*) FILTER(WHERE status=200) AS ok,sum(amount) FILTER(WHERE status=500) AS bad FROM ${events}",
+    "ordered": false
+  },
+  {
+    "id": "sql_empty_aggregate",
+    "language": "SQL",
+    "family": "null",
+    "query": "SELECT count(*) AS n,min(amount) AS low,max(amount) AS high,sum(amount) AS total FROM ${events} WHERE id<0",
+    "ordered": false,
+    "expected": [
+      {
+        "n": 0,
+        "low": null,
+        "high": null,
+        "total": null
+      }
+    ]
+  },
+  {
+    "id": "sql_aggregate_arithmetic",
+    "language": "SQL",
+    "family": "aggregate",
+    "query": "SELECT team,max(amount)-min(amount) AS spread FROM ${events} GROUP BY team",
+    "ordered": false
+  },
+  {
+    "id": "sql_inner_join",
+    "language": "SQL",
+    "family": "join",
+    "query": "SELECT e.id AS id,d.owner AS owner FROM ${events} e INNER JOIN ${departments} d ON e.team=d.team ORDER BY id,owner",
+    "ordered": true
+  },
+  {
+    "id": "sql_left_join",
+    "language": "SQL",
+    "family": "join",
+    "query": "SELECT e.id AS id,d.owner AS owner FROM ${events} e LEFT JOIN ${departments} d ON e.team=d.team ORDER BY id,owner",
+    "ordered": true
+  },
+  {
+    "id": "sql_right_join",
+    "language": "SQL",
+    "family": "join",
+    "query": "SELECT e.id AS id,d.owner AS owner FROM ${events} e RIGHT JOIN ${departments} d ON e.team=d.team ORDER BY id,owner",
+    "ordered": true
+  },
+  {
+    "id": "sql_join_filter",
+    "language": "SQL",
+    "family": "join",
+    "query": "SELECT e.id AS id,d.owner AS owner FROM ${events} e LEFT JOIN ${departments} d ON e.team=d.team AND d.budget>150 ORDER BY id,owner",
+    "ordered": true
+  },
+  {
+    "id": "sql_cross_join",
+    "language": "SQL",
+    "family": "join",
+    "query": "SELECT e.id AS id,d.owner AS owner FROM ${events} e CROSS JOIN ${departments} d WHERE e.id<=2 ORDER BY id,owner",
+    "ordered": true,
+    "expected": [
+      {
+        "id": 1,
+        "owner": "Ana"
+      },
+      {
+        "id": 1,
+        "owner": "Ben"
+      },
+      {
+        "id": 1,
+        "owner": "Dan"
+      },
+      {
+        "id": 1,
+        "owner": "Nobody"
+      },
+      {
+        "id": 2,
+        "owner": "Ana"
+      },
+      {
+        "id": 2,
+        "owner": "Ben"
+      },
+      {
+        "id": 2,
+        "owner": "Dan"
+      },
+      {
+        "id": 2,
+        "owner": "Nobody"
+      }
+    ]
+  },
+  {
+    "id": "sql_join_aggregate",
+    "language": "SQL",
+    "family": "combination",
+    "query": "SELECT d.owner AS owner,count(*) AS n,sum(e.amount) AS total FROM ${events} e INNER JOIN ${departments} d ON e.team=d.team GROUP BY d.owner ORDER BY owner",
+    "ordered": true
+  },
+  {
+    "id": "sql_in_subquery",
+    "language": "SQL",
+    "family": "subquery",
+    "query": "SELECT id FROM ${events} WHERE team IN (SELECT team FROM ${departments} WHERE budget>=200) ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_not_in_subquery",
+    "language": "SQL",
+    "family": "subquery",
+    "query": "SELECT id FROM ${events} WHERE team NOT IN (SELECT team FROM ${departments})",
+    "ordered": false,
+    "expected": []
+  },
+  {
+    "id": "sql_exists",
+    "language": "SQL",
+    "family": "subquery",
+    "query": "SELECT e.id AS id FROM ${events} e WHERE EXISTS (SELECT 1 FROM ${departments} d WHERE e.team=d.team) ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_not_exists",
+    "language": "SQL",
+    "family": "subquery",
+    "query": "SELECT e.id AS id FROM ${events} e WHERE NOT EXISTS (SELECT 1 FROM ${departments} d WHERE e.team=d.team) ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_union_all",
+    "language": "SQL",
+    "family": "set",
+    "query": "SELECT team FROM ${events} WHERE id<=3 UNION ALL SELECT team FROM ${departments}",
+    "ordered": false
+  },
+  {
+    "id": "sql_union_distinct",
+    "language": "SQL",
+    "family": "set",
+    "query": "SELECT team FROM ${events} UNION SELECT team FROM ${departments}",
+    "ordered": false
+  },
+  {
+    "id": "sql_row_number",
+    "language": "SQL",
+    "family": "window",
+    "query": "SELECT id,row_number() OVER(PARTITION BY team ORDER BY id) AS rn FROM ${events} ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_rank",
+    "language": "SQL",
+    "family": "window",
+    "query": "SELECT id,rank() OVER(ORDER BY status) AS r,dense_rank() OVER(ORDER BY status) AS dr FROM ${events} ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_running_sum",
+    "language": "SQL",
+    "family": "window",
+    "query": "SELECT id,sum(amount) OVER(PARTITION BY team ORDER BY id) AS total FROM ${events} ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_moving_sum",
+    "language": "SQL",
+    "family": "window",
+    "query": "SELECT id,sum(amount) OVER(PARTITION BY team) AS total FROM ${events} ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_window_after_group",
+    "language": "SQL",
+    "family": "combination",
+    "query": "SELECT team,count(*) AS n,row_number() OVER(ORDER BY count(*) DESC,team) AS rn FROM ${events} GROUP BY team ORDER BY rn",
+    "ordered": true
+  },
+  {
+    "id": "sql_date_filter",
+    "language": "SQL",
+    "family": "datetime",
+    "query": "SELECT id FROM ${events} WHERE ts>=TIMESTAMP '2025-01-01 02:00:00' AND ts<TIMESTAMP '2025-01-01 05:00:00' ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_date_parts",
+    "language": "SQL",
+    "family": "datetime",
+    "query": "SELECT id,year(ts) AS y,month(ts) AS m,dayofmonth(ts) AS d,hour(ts) AS h FROM ${events} ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_fields",
+    "language": "PPL",
+    "family": "fields",
+    "query": "source=${events} | fields id,team,amount | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_fields_exclude",
+    "language": "PPL",
+    "family": "fields",
+    "query": "source=${events} | fields id,team,amount | fields - amount | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_table",
+    "language": "PPL",
+    "family": "table",
+    "query": "source=${events} | table id,team | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_rename",
+    "language": "PPL",
+    "family": "rename",
+    "query": "source=${events} | rename team as category | fields id,category | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_where",
+    "language": "PPL",
+    "family": "where",
+    "query": "source=${events} | where status=200 and amount>10 | fields id | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_eval_dependencies",
+    "language": "PPL",
+    "family": "eval",
+    "query": "source=${events} | eval x=coalesce(amount,0)+1,y=x * 2 | fields id,x,y | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_case",
+    "language": "PPL",
+    "family": "eval",
+    "query": "source=${events} | eval result=if(status=200,'ok','bad') | fields id,result | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_sort_head",
+    "language": "PPL",
+    "family": "head",
+    "query": "source=${events} | sort -id | head 4 | fields id",
+    "ordered": true,
+    "expected": [
+      {
+        "id": 12
+      },
+      {
+        "id": 11
+      },
+      {
+        "id": 10
+      },
+      {
+        "id": 9
+      }
+    ]
+  },
+  {
+    "id": "ppl_head_after_eval",
+    "language": "PPL",
+    "family": "head",
+    "query": "source=${events} | sort id | eval x=id * 2 | head 3 | fields id,x",
+    "ordered": true
+  },
+  {
+    "id": "ppl_reverse",
+    "language": "PPL",
+    "family": "reverse",
+    "query": "source=${events} | sort id | head 4 | reverse | fields id",
+    "ordered": true,
+    "expected": [
+      {
+        "id": 4
+      },
+      {
+        "id": 3
+      },
+      {
+        "id": 2
+      },
+      {
+        "id": 1
+      }
+    ]
+  },
+  {
+    "id": "ppl_dedup",
+    "language": "PPL",
+    "family": "dedup",
+    "query": "source=${events} | sort id | dedup team | fields id,team",
+    "ordered": false
+  },
+  {
+    "id": "ppl_dedup_two",
+    "language": "PPL",
+    "family": "dedup",
+    "query": "source=${events} | sort id | dedup 2 team | fields id,team",
+    "ordered": false
+  },
+  {
+    "id": "ppl_dedup_keepempty",
+    "language": "PPL",
+    "family": "dedup",
+    "query": "source=${events} | sort id | dedup team keepempty=true | fields id,team",
+    "ordered": false
+  },
+  {
+    "id": "ppl_fillnull",
+    "language": "PPL",
+    "family": "fillnull",
+    "query": "source=${events} | fillnull using amount=0,team='unknown' | fields id,amount,team | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_stats",
+    "language": "PPL",
+    "family": "stats",
+    "query": "source=${events} | stats count() as n,sum(amount) as total,avg(amount) as mean by team | sort team",
+    "ordered": true
+  },
+  {
+    "id": "ppl_count_eval",
+    "language": "PPL",
+    "family": "stats",
+    "query": "source=${events} | stats count(eval(status=200)) as ok,count(amount) as present",
+    "ordered": false
+  },
+  {
+    "id": "ppl_stats_expression",
+    "language": "PPL",
+    "family": "stats",
+    "query": "source=${events} | eval user_lower=lower(username) | stats sum(amount) as total by user_lower | sort user_lower",
+    "ordered": true
+  },
+  {
+    "id": "ppl_stats_then_where",
+    "language": "PPL",
+    "family": "combination",
+    "query": "source=${events} | where id>2 | stats count() as n,sum(amount) as total by team | where n>=2 | sort -n,team | head 2",
+    "ordered": true
+  },
+  {
+    "id": "ppl_stats_twice",
+    "language": "PPL",
+    "family": "combination",
+    "query": "source=${events} | stats count() as n by team | stats sum(n) as total",
+    "ordered": false,
+    "expected": [
+      {
+        "total": 12
+      }
+    ]
+  },
+  {
+    "id": "ppl_stats_values",
+    "language": "PPL",
+    "family": "stats",
+    "query": "source=${events} | stats distinct_count(username) as n by team | sort team",
+    "ordered": true
+  },
+  {
+    "id": "ppl_eventstats",
+    "language": "PPL",
+    "family": "eventstats",
+    "query": "source=${events} | eventstats avg(amount) as mean by team | fields id,mean | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_eventstats_filter",
+    "language": "PPL",
+    "family": "combination",
+    "query": "source=${events} | eventstats avg(amount) as mean by team | where amount>mean | fields id | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_streamstats",
+    "language": "PPL",
+    "family": "streamstats",
+    "query": "source=${events} | sort id | streamstats sum(amount) as running | fields id,running",
+    "ordered": true
+  },
+  {
+    "id": "ppl_streamstats_partition",
+    "language": "PPL",
+    "family": "streamstats",
+    "query": "source=${events} | sort id | streamstats count() as n by team | fields id,n",
+    "ordered": true
+  },
+  {
+    "id": "ppl_streamstats_window",
+    "language": "PPL",
+    "family": "streamstats",
+    "query": "source=${events} | sort id | streamstats window=3 sum(amount) as moving | fields id,moving",
+    "ordered": true
+  },
+  {
+    "id": "ppl_streamstats_previous",
+    "language": "PPL",
+    "family": "streamstats",
+    "query": "source=${events} | sort id | streamstats current=false max(amount) as previous | fields id,previous",
+    "ordered": true
+  },
+  {
+    "id": "ppl_bin_numeric",
+    "language": "PPL",
+    "family": "bin",
+    "query": "source=${events} | bin id span=3 | stats count() as n by id | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_bin_time",
+    "language": "PPL",
+    "family": "bin",
+    "query": "source=${events} | bin ts span=2h | stats count() as n by ts | sort ts",
+    "ordered": true
+  },
+  {
+    "id": "ppl_parse",
+    "language": "PPL",
+    "family": "parse",
+    "query": "source=${events} | parse message '(?<actor>[a-z]+) (?<action>[a-z]+)' | fields id,actor,action | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_grok",
+    "language": "PPL",
+    "family": "grok",
+    "query": "source=${events} | grok message '%{WORD:actor} %{WORD:action}' | fields id,actor,action | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_rex",
+    "language": "PPL",
+    "family": "rex",
+    "query": "source=${events} | rex field=message \"(?<actor>[a-z]+)\" | fields id,actor | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_regex",
+    "language": "PPL",
+    "family": "regex",
+    "query": "source=${events} | regex message=\"error\" | fields id | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_spath",
+    "language": "PPL",
+    "family": "spath",
+    "query": "source=${events} | spath input=payload output=region path=region | fields id,region | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_parse_aggregate",
+    "language": "PPL",
+    "family": "combination",
+    "query": "source=${events} | parse message '(?<actor>[a-z]+) (?<action>[a-z]+)' | stats count() as n by action | sort action",
+    "ordered": true
+  },
+  {
+    "id": "ppl_mvexpand",
+    "language": "PPL",
+    "family": "mvexpand",
+    "query": "source=${events} | mvexpand tags | fields id,tags | sort id,tags",
+    "ordered": true
+  },
+  {
+    "id": "ppl_mvexpand_aggregate",
+    "language": "PPL",
+    "family": "combination",
+    "query": "source=${events} | mvexpand tags | stats count() as n by tags | sort tags",
+    "ordered": true
+  },
+  {
+    "id": "ppl_nomv",
+    "language": "PPL",
+    "family": "nomv",
+    "query": "source=${events} | nomv tags | fields id,tags | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_mvcombine",
+    "language": "PPL",
+    "family": "mvcombine",
+    "query": "source=${events} | sort id | fields team,username | mvcombine username | nomv username | sort team",
+    "ordered": true
+  },
+  {
+    "id": "ppl_array_functions",
+    "language": "PPL",
+    "family": "array",
+    "query": "source=${events} | eval size=array_length(tags),joined=mvjoin(tags,',') | fields id,size,joined | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_join",
+    "language": "PPL",
+    "family": "join",
+    "query": "source=${events} | inner join left=e right=d on e.team=d.team ${departments} | fields e.id,d.owner | sort e.id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_left_join",
+    "language": "PPL",
+    "family": "join",
+    "query": "source=${events} | left join left=e right=d on e.team=d.team ${departments} | fields e.id,d.owner | sort e.id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_lookup",
+    "language": "PPL",
+    "family": "lookup",
+    "query": "source=${events} | lookup ${departments} team replace owner | fields id,owner | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_lookup_aggregate",
+    "language": "PPL",
+    "family": "combination",
+    "query": "source=${events} | lookup ${departments} team replace owner | fillnull using owner='unknown' | stats count() as n by owner | sort owner",
+    "ordered": true
+  },
+  {
+    "id": "ppl_in_subquery",
+    "language": "PPL",
+    "family": "subquery",
+    "query": "source=${events} | where team in [ source=${departments} | where budget>100 | fields team ] | fields id | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_append",
+    "language": "PPL",
+    "family": "append",
+    "query": "source=${events} | where id<=2 | fields id | append [source=${events} | where id>=11 | fields id] | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_appendpipe",
+    "language": "PPL",
+    "family": "appendpipe",
+    "query": "source=${events} | fields team,amount | appendpipe [stats sum(amount) as amount by team]",
+    "ordered": false
+  },
+  {
+    "id": "ppl_appendpipe_filter",
+    "language": "PPL",
+    "family": "combination",
+    "query": "source=${events} | where status=200 | fields id,team | appendpipe [where id<3] | sort id,team",
+    "ordered": true
+  },
+  {
+    "id": "ppl_appendcol",
+    "language": "PPL",
+    "family": "appendcol",
+    "query": "source=${events} | sort id | fields id | appendcol [eval doubled=id * 2 | fields doubled] | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_union",
+    "language": "PPL",
+    "family": "union",
+    "query": "source=${events} | where id<=2 | fields id | union [source=${events} | where id>=11 | fields id] | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_multisearch",
+    "language": "PPL",
+    "family": "multisearch",
+    "query": "multisearch [source=${events} | where id<=2 | fields id] [source=${events} | where id>=11 | fields id] | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_top",
+    "language": "PPL",
+    "family": "top",
+    "query": "source=${events} | top 20 team | sort team",
+    "ordered": true
+  },
+  {
+    "id": "ppl_rare",
+    "language": "PPL",
+    "family": "rare",
+    "query": "source=${events} | rare 20 team | sort team",
+    "ordered": true
+  },
+  {
+    "id": "ppl_chart",
+    "language": "PPL",
+    "family": "chart",
+    "query": "source=${events} | chart count() as n by team | sort team",
+    "ordered": true
+  },
+  {
+    "id": "ppl_timechart",
+    "language": "PPL",
+    "family": "timechart",
+    "query": "source=${events} | timechart timefield=ts span=2h count() as n",
+    "ordered": false
+  },
+  {
+    "id": "ppl_timechart_split",
+    "language": "PPL",
+    "family": "timechart",
+    "query": "source=${events} | timechart timefield=ts span=2h count() by team",
+    "ordered": false
+  },
+  {
+    "id": "ppl_trendline",
+    "language": "PPL",
+    "family": "trendline",
+    "query": "source=${events} | sort id | trendline sma(3,id) as moving | fields id,moving",
+    "ordered": true
+  },
+  {
+    "id": "ppl_addtotals",
+    "language": "PPL",
+    "family": "addtotals",
+    "query": "source=${events} | fields id,bytes | addtotals id bytes fieldname='total' | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_addcoltotals",
+    "language": "PPL",
+    "family": "addcoltotals",
+    "query": "source=${events} | stats count() as n by team | sort team | addcoltotals n labelfield='team'",
+    "ordered": false
+  },
+  {
+    "id": "ppl_transpose",
+    "language": "PPL",
+    "family": "transpose",
+    "query": "source=${events} | sort id | head 3 | fields id,username | transpose 3",
+    "ordered": false
+  },
+  {
+    "id": "ppl_xyseries",
+    "language": "PPL",
+    "family": "xyseries",
+    "query": "source=${events} | stats count() as n by team,status | xyseries team status in (\"200\",\"404\",\"500\") n",
+    "ordered": false
+  },
+  {
+    "id": "ppl_foreach",
+    "language": "PPL",
+    "family": "foreach",
+    "query": "source=${events} | foreach id bytes [eval <<FIELD>>_double=<<FIELD>> * 2] | fields id,id_double,bytes_double | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_convert",
+    "language": "PPL",
+    "family": "convert",
+    "query": "source=${events} | eval number=cast(id as string) | convert num(number) | fields id,number | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_replace",
+    "language": "PPL",
+    "family": "replace",
+    "query": "source=${events} | replace \"alpha\" WITH \"A\" IN team | fields id,team | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_fieldformat",
+    "language": "PPL",
+    "family": "fieldformat",
+    "query": "source=${events} | fieldformat category=upper(team) | fields id,category | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_pattern",
+    "language": "PPL",
+    "family": "patterns",
+    "query": "source=${events} | patterns message method=simple_pattern | fields id,patterns_field | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_date_parts",
+    "language": "PPL",
+    "family": "datetime",
+    "query": "source=${events} | eval y=year(ts),h=hour(ts) | fields id,y,h | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_complex_analysis",
+    "language": "PPL",
+    "family": "combination",
+    "query": "source=${events} | where status in (200,500) | fillnull using amount=0 | eval value=amount * 2 | eventstats avg(value) as mean by team | where value>=mean | stats count() as n,sum(value) as total by team | sort -total,team",
+    "ordered": true
+  },
+  {
+    "id": "ppl_complex_join",
+    "language": "PPL",
+    "family": "combination",
+    "query": "source=${events} | where id>1 | lookup ${departments} team replace owner | fillnull using owner='unknown',amount=0 | stats sum(amount) as total,count() as n by owner | eval mean=total/n | sort owner",
+    "ordered": true
+  },
+  {
+    "id": "ppl_expand",
+    "language": "PPL",
+    "family": "expand",
+    "query": "source=${events} | expand tags | fields id,tags | sort id,tags",
+    "ordered": true
+  },
+  {
+    "id": "ppl_makeresults_json",
+    "language": "PPL",
+    "family": "makeresults",
+    "query": "makeresults format=json data='[{\"n\":1},{\"n\":2}]' | stats sum(n) as total",
+    "ordered": false
+  },
+  {
+    "id": "ppl_makeresults_count",
+    "language": "PPL",
+    "family": "makeresults",
+    "query": "makeresults count=3 | eval n=1 | stats count() as total",
+    "ordered": false
+  },
+  {
+    "id": "ppl_bin_day",
+    "language": "PPL",
+    "family": "bin",
+    "query": "source=${events} | bin ts span=1d | stats count() as n by ts",
+    "ordered": false
+  },
+  {
+    "id": "ppl_timewrap",
+    "language": "PPL",
+    "family": "timewrap",
+    "query": "source=${events} | timechart timefield=ts span=1h count() as n | timewrap 6h",
+    "ordered": false
+  },
+  {
+    "id": "ppl_temporal_nested",
+    "language": "PPL",
+    "family": "datetime",
+    "query": "source=${events} | eval day=date(ts),midnight=timestamp(day) | fields id,day,midnight | sort id",
+    "ordered": true
+  },
+  {
+    "id": "sql_temporal_nested",
+    "language": "SQL",
+    "family": "datetime",
+    "query": "SELECT id,timestamp(date(ts)) AS midnight FROM ${events} ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_multi_branch_join",
+    "language": "PPL",
+    "family": "combination",
+    "query": "source=${events} | where id<=3 | inner join left=e right=d on e.team=d.team [source=${departments} | where budget>0 | appendpipe [where budget=100]] | fields e.id,d.owner",
+    "ordered": false
+  },
+  {
+    "id": "ppl_dedup_eventstats",
+    "language": "PPL",
+    "family": "combination",
+    "query": "source=${events} | sort id | dedup team | eventstats sum(amount) as total | fields id,team,total | sort id",
+    "ordered": true
+  },
+  {
+    "id": "ppl_array_lookup",
+    "language": "PPL",
+    "family": "combination",
+    "query": "source=${events} | mvexpand tags | lookup ${departments} team replace owner | stats count() as n by owner,tags | sort owner,tags",
+    "ordered": true
+  },
+  {
+    "id": "sql_three_way_join",
+    "language": "SQL",
+    "family": "combination",
+    "query": "SELECT e.id AS id,d.owner AS owner,x.username AS username FROM ${events} e INNER JOIN ${departments} d ON e.team=d.team LEFT JOIN ${events} x ON x.id=e.id WHERE e.id<5 ORDER BY id",
+    "ordered": true
+  },
+  {
+    "id": "sql_window_over_join",
+    "language": "SQL",
+    "family": "combination",
+    "query": "SELECT e.id AS id,row_number() OVER(PARTITION BY d.owner ORDER BY e.id) AS rn FROM ${events} e LEFT JOIN ${departments} d ON e.team=d.team ORDER BY id",
+    "ordered": true
+  }
+]
