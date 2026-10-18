@@ -69,6 +69,16 @@ public class OpenSearchTypeFactory extends JavaTypeFactoryImpl {
     super(typeSystem);
   }
 
+  @Override
+  public Charset getDefaultCharset() {
+    Charset configured = super.getDefaultCharset();
+    // Embedded callers do not run SQLPlugin's Unicode initialization. Upgrade Calcite's
+    // Latin-1 default, while preserving an explicitly configured charset such as UTF-16LE.
+    return configured.equals(java.nio.charset.StandardCharsets.ISO_8859_1)
+        ? java.nio.charset.StandardCharsets.UTF_8
+        : configured;
+  }
+
   @Getter
   public enum ExprUDT {
     EXPR_DATE(DATE),

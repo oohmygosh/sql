@@ -225,13 +225,15 @@ public interface PlanUtils {
       case VARSAMP:
         return variance(context, field, partitions, rows, lowerBound, upperBound, false, false);
       case ROW_NUMBER:
+        // Enumerable ranking must advance for every row, regardless of the aggregate frame.
+        // A whole-partition frame can otherwise reuse the first row's result for all rows.
         return withOver(
             context.relBuilder.aggregateCall(SqlStdOperatorTable.ROW_NUMBER),
             partitions,
             orderKeys,
             true,
-            lowerBound,
-            upperBound);
+            UNBOUNDED_PRECEDING,
+            CURRENT_ROW);
       // Calcite rank operators disallow framing, so the ROWS/RANGE flag below is normalized away.
       case RANK:
         return withOver(

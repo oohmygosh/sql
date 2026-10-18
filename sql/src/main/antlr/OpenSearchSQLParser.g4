@@ -692,6 +692,7 @@ textFunctionName
 flowControlFunctionName
    : IF
    | IFNULL
+   | COALESCE
    | NULLIF
    | ISNULL
    ;

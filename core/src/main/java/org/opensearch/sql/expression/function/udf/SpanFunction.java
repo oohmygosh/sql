@@ -5,6 +5,8 @@
 
 package org.opensearch.sql.expression.function.udf;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.List;
 import org.apache.calcite.adapter.enumerable.NotNullImplementor;
 import org.apache.calcite.adapter.enumerable.NullPolicy;
@@ -83,6 +85,13 @@ public class SpanFunction extends ImplementorUDF {
       RelDataType intervalType = call.getOperands().get(1).getType();
       RelDataType unitType = call.getOperands().get(2).getType();
 
+      if (SqlTypeUtil.isNull(unitType) && SqlTypeUtil.isDecimal(call.getType())) {
+        return Expressions.call(
+            SpanFunction.class,
+            "evalDecimal",
+            Expressions.convert_(Expressions.box(field), Number.class),
+            Expressions.convert_(Expressions.box(interval), Number.class));
+      }
       if (SqlTypeUtil.isDecimal(intervalType)) {
         interval = Expressions.call(interval, "doubleValue");
       }
@@ -127,6 +136,13 @@ public class SpanFunction extends ImplementorUDF {
               "Unsupported expr type: %s",
               OpenSearchTypeFactory.convertRelDataTypeToExprType(fieldType)));
     }
+  }
+
+  /** Preserve DECIMAL/UInt64 low bits when computing an integral bucket boundary. */
+  public static BigDecimal evalDecimal(Number value, Number interval) {
+    if (value == null || interval == null) return null;
+    BigDecimal width = new BigDecimal(interval.toString());
+    return new BigDecimal(value.toString()).divide(width, 0, RoundingMode.FLOOR).multiply(width);
   }
 
   public static Object evalNative(Object value, int interval, String unit, String typeName) {

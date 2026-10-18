@@ -28,6 +28,12 @@ final class QueryClickHouseDialect extends ClickHouseSqlDialect {
   }
 
   @Override
+  public void quoteStringLiteral(StringBuilder buffer, String charsetName, String value) {
+    // ClickHouse strings are UTF-8 and do not accept SQL charset introducers such as _UTF-8.
+    super.quoteStringLiteral(buffer, null, value);
+  }
+
+  @Override
   public boolean supportsFunction(SqlOperator operator, RelDataType type, List<RelDataType> args) {
     if (Set.of(
             "CAST",
@@ -66,6 +72,7 @@ final class QueryClickHouseDialect extends ClickHouseSqlDialect {
       writer.print("toDateTime64");
       var frame =
           writer.startList(org.apache.calcite.sql.SqlWriter.FrameTypeEnum.FUN_CALL, "(", ")");
+      writer.sep(",");
       writer.literal("'" + timestamp.toFormattedString() + "'");
       writer.sep(",");
       writer.literal(Integer.toString(Math.max(3, timestamp.getPrec())));

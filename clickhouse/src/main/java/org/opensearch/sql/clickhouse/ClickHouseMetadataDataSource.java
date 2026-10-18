@@ -18,7 +18,7 @@ import java.sql.Types;
 import java.util.logging.Logger;
 import javax.sql.DataSource;
 
-/** JDBC reports unbounded String as size zero; Calcite otherwise treats it as VARCHAR(0). */
+/** Adapts ClickHouse JDBC metadata to exact Calcite numeric types and unbounded strings. */
 final class ClickHouseMetadataDataSource implements DataSource {
   private final DataSource delegate;
 
@@ -55,6 +55,19 @@ final class ClickHouseMetadataDataSource implements DataSource {
                         new Class<?>[] {ResultSet.class},
                         (p2, m2, a2) -> {
                           Object value = invoke(columns, m2, a2);
+                          if (m2.getName().equals("getInt") && a2 != null) {
+                            String typeName = columns.getString("TYPE_NAME");
+                            if ("UInt64".equals(typeName) || "Nullable(UInt64)".equals(typeName)) {
+                              // BIGINT cannot hold UInt64; OTHER becomes ANY and breaks numeric
+                              // analysis. DECIMAL(20,0) keeps every bit, including values > 2^63-1.
+                              if (Integer.valueOf(5).equals(a2[0]) || "DATA_TYPE".equals(a2[0]))
+                                return Types.DECIMAL;
+                              if (Integer.valueOf(7).equals(a2[0]) || "COLUMN_SIZE".equals(a2[0]))
+                                return 20;
+                              if (Integer.valueOf(9).equals(a2[0])
+                                  || "DECIMAL_DIGITS".equals(a2[0])) return 0;
+                            }
+                          }
                           if (m2.getName().equals("getInt")
                               && a2 != null
                               && (Integer.valueOf(7).equals(a2[0]) || "COLUMN_SIZE".equals(a2[0]))

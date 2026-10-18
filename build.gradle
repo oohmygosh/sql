@@ -147,6 +147,12 @@ allprojects {
 
     tasks.withType(Test) {
         jvmArgs '-Dnet.bytebuddy.experimental=true'
+        // Match the engine's Unicode type factory so plan snapshots omit redundant charset
+        // annotations. The live example keeps Calcite's JVM defaults to test embedded startup.
+        if (project.name != 'spring-boot-example') {
+            systemProperty 'calcite.default.charset', 'UTF-8'
+            systemProperty 'calcite.default.collation.name', 'UTF-8$en_US'
+        }
     }
 
     configurations.all {

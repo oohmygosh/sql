@@ -219,6 +219,7 @@ FROM_UNIXTIME:                      'FROM_UNIXTIME';
 GET_FORMAT:                         'GET_FORMAT';
 IF:                                 'IF';
 IFNULL:                             'IFNULL';
+COALESCE:                           'COALESCE';
 ISNULL:                             'ISNULL';
 LAST_DAY:                           'LAST_DAY';
 LENGTH:                             'LENGTH';

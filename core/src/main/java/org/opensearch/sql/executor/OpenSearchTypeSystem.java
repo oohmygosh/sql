@@ -52,7 +52,12 @@ public class OpenSearchTypeSystem extends RelDataTypeSystemImpl {
 
   @Override
   public RelDataType deriveAvgAggType(RelDataTypeFactory typeFactory, RelDataType argumentType) {
-    if (SqlTypeName.DECIMAL == argumentType.getSqlTypeName()) {
+    if (SqlTypeName.DECIMAL == argumentType.getSqlTypeName() && argumentType.getScale() == 0) {
+      // Integral decimals (including UInt64) follow integer AVG/variance semantics. A fixed
+      // four-digit result scale silently truncates averages and standard deviations.
+      return typeFactory.createTypeWithNullability(
+          typeFactory.createSqlType(SqlTypeName.DOUBLE), false);
+    } else if (SqlTypeName.DECIMAL == argumentType.getSqlTypeName()) {
       return typeFactory.createTypeWithNullability(highPrecision(typeFactory, argumentType), false);
     } else if (INT_TYPES.contains(argumentType.getSqlTypeName())) {
       return typeFactory.createTypeWithNullability(
