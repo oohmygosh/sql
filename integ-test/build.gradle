@@ -75,11 +75,6 @@ ext {
     projectSubstitutions = [:]
     licenseFile = rootProject.file('LICENSE.TXT')
     noticeFile = rootProject.file('NOTICE')
-    telemetryOtelVersion = System.getProperty("telemetryOtelVersion")
-    if (!telemetryOtelVersion) {
-        def metadataUrl = new URL('https://ci.opensearch.org/maven2/org/opensearch/plugin/telemetry-otel/maven-metadata.xml')
-        telemetryOtelVersion = new XmlParser().parse(metadataUrl.openStream()).versioning.release.text()
-    }
 
     getSecurityPluginDownloadLink = { ->
         var repo = "https://ci.opensearch.org/ci/dbc/snapshots/maven/org/opensearch/plugin/" +
@@ -443,7 +438,13 @@ ext.telemetryOtelZip = file("${buildDir}/tmp/telemetry-otel-patched.zip")
 def downloadTelemetryOtel = tasks.register('downloadTelemetryOtel') {
     outputs.file(project.telemetryOtelZip)
     doLast {
-        def v = project.telemetryOtelVersion
+        def v = System.getProperty("telemetryOtelVersion")
+        if (!v) {
+            def metadataUrl = new URL('https://ci.opensearch.org/maven2/org/opensearch/plugin/telemetry-otel/maven-metadata.xml')
+            v = metadataUrl.openStream().withCloseable {
+                new XmlParser().parse(it).versioning.release.text()
+            }
+        }
         def clusterVersion = opensearch_version.toString().tokenize('-')[0]
         def rawZip = file("${buildDir}/tmp/telemetry-otel-${v}-raw.zip")
         def extractDir = file("${buildDir}/tmp/telemetry-otel-${v}-extracted")

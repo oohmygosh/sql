@@ -16,29 +16,6 @@ dependencies {
 }
 application { mainClass = 'org.opensearch.sql.example.QueryApplication' }
 
-// Keep the UI in this example module. The executable JAR serves it on the same origin.
-def frontendDirectory = layout.projectDirectory.dir('frontend')
-def npmCommand = System.getProperty('os.name').toLowerCase().contains('windows') ? 'npm.cmd' : 'npm'
-tasks.register('frontendInstall', Exec) {
-    workingDir frontendDirectory
-    commandLine npmCommand, 'ci', '--no-audit', '--no-fund'
-    inputs.files('frontend/package.json', 'frontend/package-lock.json')
-    outputs.dir('frontend/node_modules')
-}
-tasks.register('frontendBuild', Exec) {
-    dependsOn 'frontendInstall'
-    workingDir frontendDirectory
-    commandLine npmCommand, 'run', 'build'
-    inputs.files(fileTree('frontend') {
-        exclude 'node_modules/**', 'dist/**', 'README.md', '.env.local'
-    })
-    outputs.dir('frontend/dist')
-}
-tasks.named('processResources') {
-    dependsOn 'frontendBuild'
-    from('frontend/dist') { into 'static' }
-}
-
 configurations.configureEach {
     // Spring's spring-jcl supplies the Commons Logging API used by the backend clients.
     exclude group: 'commons-logging', module: 'commons-logging'

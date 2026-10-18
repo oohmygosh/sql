@@ -4,7 +4,7 @@
 
 ## 搜索前端
 
-访问 `http://localhost:8080/` 使用 Lens 搜索页面，源码及前端使用说明见 [`frontend/README.md`](frontend/README.md)。页面提交 SQL/PPL 原文、时间和结构化筛选；表名以语句为准，默认模板不自动添加 `LIMIT/head`。分页在后台执行，翻页只请求明细并保留图表。图表直接使用后台桶数据，点击桶缩小时间范围。查询历史保存完整条件，导出复用最后一次成功查询的固定时间与筛选。
+前端独立启动，访问 `http://127.0.0.1:5173/` 使用 Lens 搜索页面，源码及启动说明见 [`frontend/README.md`](frontend/README.md)。页面提交 SQL/PPL 原文、时间和结构化筛选；表名以语句为准，默认模板不自动添加 `LIMIT/head`。分页在后台执行，翻页只请求明细并保留图表。图表直接使用后台桶数据，点击桶缩小时间范围。查询历史保存完整条件，导出复用最后一次成功查询的固定时间与筛选。
 
 `GET /ui/config` 仅提供数据源名称、类型、默认表、时间字段/时区及显式配置的源字段，并提供顶层 `maxPageSize`，不暴露连接地址和凭据。默认表为 `logevent-*` / `log_event`，可通过 `ES_TEST_INDEX` / `CLICKHOUSE_TEST_TABLE` 或 `unified-query.ui.default-tables` 覆盖。它们仅用于生成快捷语句；界面没有独立的表名输入框。字段面板区分源字段与结果列/别名，结果别名不能直接生成源字段筛选。
 
@@ -12,7 +12,7 @@
 
 前端负责 150ms 防抖、键盘与组合输入处理、来源切换以及按 UTF-16 范围插入候选，补全时不向后端发送语句或光标。后端只提供语法包和配置，不接收补全请求，也不访问 Elasticsearch 或 ClickHouse 来计算候选。完整语句末尾和等待用户填写字面值的位置停止提示；补全不包含实时语法错误诊断。
 
-构建需要 Node.js 20.19+ 或 22.12+ 和 npm。`:spring-boot-example:bootJar` 自动安装锁定依赖、构建前端并打包到 JAR；运行 JAR 不需要 Node.js。IDE 直接启动前执行 `:spring-boot-example:processResources`，或独立运行 Vite。请求和异步任务链接支持 Spring servlet context path。
+后端仅提供 HTTP 接口，IDE 直接运行 `QueryApplication`；Gradle 构建和 JAR 运行均不需要 Node.js，也不构建或打包前端。前端在 `frontend/` 下执行 `npm ci`、`npm run dev`，由 Vite 将 `/search` 和 `/ui` 代理到后端 `http://127.0.0.1:8080`。请求和异步任务链接支持 Spring servlet context path。
 
 ## 代码结构
 
