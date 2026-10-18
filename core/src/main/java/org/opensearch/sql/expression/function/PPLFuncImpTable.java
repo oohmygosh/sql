@@ -1876,8 +1876,10 @@ public class PPLFuncImpTable {
       // Comparison operators like EQUAL, GREATER_THAN, LESS_THAN, etc.
       // SameOperandTypeCheckers like COALESCE, IFNULL, etc.
       pplTypeChecker = PPLTypeChecker.wrapComparable(comparableTypeChecker);
-    } else if (typeChecker instanceof UDFOperandMetadata.UDTOperandMetadata udtOperandMetadata) {
-      pplTypeChecker = PPLTypeChecker.wrapUDT(udtOperandMetadata.allowedParamTypes());
+    } else if (typeChecker
+        instanceof
+        UDFOperandMetadata.UDTOperandMetadata(List<List<RelDataType>> allowedParamTypes)) {
+      pplTypeChecker = PPLTypeChecker.wrapUDT(allowedParamTypes);
     } else if (typeChecker != null) {
       pplTypeChecker = PPLTypeChecker.wrapDefault(typeChecker);
     } else {
