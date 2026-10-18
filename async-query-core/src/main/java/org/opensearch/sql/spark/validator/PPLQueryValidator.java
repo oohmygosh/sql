@@ -17,7 +17,7 @@ import org.opensearch.sql.spark.antlr.parser.OpenSearchPPLParser;
 
 @AllArgsConstructor
 public class PPLQueryValidator {
-  private static final Logger log = LogManager.getLogger(SQLQueryValidator.class);
+  private static final Logger log = LogManager.getLogger(PPLQueryValidator.class);
 
   private final GrammarElementValidatorProvider grammarElementValidatorProvider;
 

@@ -5,7 +5,10 @@
 
 package org.opensearch.sql.spark.rest.model;
 
+import lombok.Getter;
+
 /** Language type accepted in async query apis. */
+@Getter
 public enum LangType {
   SQL("sql"),
   PPL("ppl"),
@@ -14,10 +17,6 @@ public enum LangType {
 
   LangType(String text) {
     this.text = text;
-  }
-
-  public String getText() {
-    return this.text;
   }
 
   /**

@@ -21,7 +21,7 @@ public enum PPLGrammarElement implements GrammarElement {
   JSON_FUNCTIONS("JSON functions"),
   LAMBDA_FUNCTIONS("Lambda functions");
 
-  String description;
+  final String description;
 
   @Override
   public String toString() {

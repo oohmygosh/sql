@@ -64,18 +64,19 @@ class QueryApplicationLiveTest {
 
     @Test
     void elasticsearchPplExecutesRealQuery() throws Exception {
+        assertElasticsearchQuery(QueryType.PPL, """
+                source=`logevent-*`
+                | fields id, timestamp, hostIp, extracted
+                | where extracted.process.name != 'nezha-agent'
+                | sort - timestamp
+                | head 5
+                """);
         // assertElasticsearchQuery(QueryType.PPL, """
         //         source=`*`
-        //         | fields id, timestamp, hostIp
-        //         | where hostIp = '192.168.100.177' and timestamp < "2026-10-17"
-        //         | sort - timestamp
-        //         | head 5 from 2
+        //         | where timestamp >= "2026-10-18"
+        //         | stats sum(size) by span(timestamp, 1h) as time_bucket
+        //         | sort - time_bucket
         //         """);
-        assertElasticsearchQuery(QueryType.PPL, """
-                source=`*`
-                | where timestamp > "2026-10-11"
-                | stats count()  as requests by span(timestamp, 1d) as time_bucket
-                """);
     }
 
     @Test

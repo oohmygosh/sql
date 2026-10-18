@@ -169,3 +169,44 @@ are written to `elasticsearch/build/reports/corpus/elasticsearch.json` and
 `clickhouse/build/reports/corpus/clickhouse.json`. Fixture creation and deletion are outside the
 query API, and cleanup runs even when a case fails. Credentials are read only from environment
 variables and are not included in the corpus or reports.
+
+## Host-managed query sessions
+
+`UnifiedQueryService.openSession(source, language, query, options)` prepares and reads one
+query across pages. The session owns its Calcite context, JDBC statement and result iterator.
+`describe()` compiles without scanning rows; `readPage(size)` returns a response and `hasMore`.
+A lookahead row belongs to the next page, and exhausting the cursor closes its statement/result.
+Always close the session, including when a page is rejected by an application output policy.
+The service borrows backend clients; closing it cancels its sessions without closing those clients.
+Spring destroys the service before the configured backend registry.
+
+Each session uses a serial virtual worker so pages arriving on different request threads retain
+Calcite's query-local planning/warning/timewrap state. `closeAsync()` reports actual resource
+cleanup and returns an independent future; caller cancellation cannot publish cleanup early.
+`close()` waits at most five seconds. If a driver is still unwinding, cleanup remains active and
+its scheduler stays alive until the actual cleanup completes.
+
+`QueryExecutionOptions` accepts a trusted `schemaFactory` or `scopedSchemaFactory`, a logical
+default schema, settings snapshot and a bound-plan processor. Both execution and explain apply
+the same request-local catalog and plan policy. The controlled factory receives a
+`QueryExecutionControl`; backend adapters register transport cancellation and account actual
+scanned rows/bytes with it. Do not deserialize these callbacks from HTTP or put user-specific
+state on a shared backend singleton.
+
+`QueryLimits` defines a session deadline and scan/input/output/materialization limits. Plain
+library defaults are unbounded for compatibility; a hosting product must select finite limits.
+A backend must wire its actual reads into the control before the host can claim scan or transport
+cancellation enforcement. The generic JDBC statement, optimizer checks and cancellation retry
+mechanism are provided; backend-specific integration is a separate responsibility.
+
+Ordinary pages stream rows using the same native type converter as collected responses.
+`timewrap` requires complete bounded input: sessions require a finite materialization budget,
+pivot once, and then page the resulting dynamic columns. Exceeding a limit fails rather than
+returning truncated aggregates. The existing collected `execute` API retains its output-size
+setting; it is not a substitute for a host's complete-input and paging contract.
+
+For a source-stamped local publication, pass `-PunifiedQueryVersion=3.10.0.0-<source-stamp>`
+to `publishToMavenLocal`. The override versions all query modules, including their internal Maven
+dependencies, while OpenSearch server/build-tool versions stay independently configured.
+Snapshot overrides are rejected. Record the source manifest and artifact checksums before an
+embedded application consumes the result; remote artifact publication is a separate operation.
