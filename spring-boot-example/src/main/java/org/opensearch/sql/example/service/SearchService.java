@@ -10,8 +10,12 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import org.apache.calcite.rel.RelRoot;
+import org.apache.calcite.runtime.Hook;
 import org.opensearch.sql.api.QueryExecutionRequest;
 import org.opensearch.sql.api.QueryExecutionRequest.ResultWindow;
 import org.opensearch.sql.api.QueryExecutionRequest.TimeRange;
@@ -86,7 +90,7 @@ public class SearchService {
           || offset > properties.maxOffset())
         throw new IllegalArgumentException("page exceeds configured size or offset limits");
       QueryResponse response =
-          queries.execute(execution.withWindow(new ResultWindow((int) offset, size + 1)));
+          execute(execution.withWindow(new ResultWindow((int) offset, size + 1)), "明细查询");
       checkResponse(response);
       warnings.addAll(response.getWarnings());
       var columns = response.getSchema().getColumns();
@@ -142,9 +146,10 @@ public class SearchService {
     }
     try {
       QueryResponse response =
-          queries.execute(
+          execute(
               execution.withHistogram(
-                  new QueryExecutionRequest.Histogram(range.field(), interval, range.timeZone())));
+                  new QueryExecutionRequest.Histogram(range.field(), interval, range.timeZone())),
+              "时间分布");
       checkResponse(response);
       if (response.getWarnings().stream()
           .anyMatch(warning -> Warning.TYPE_PARTIAL_RESULT.equals(warning.getType())))
@@ -172,6 +177,27 @@ public class SearchService {
       return new SearchResponse.Histogram(
           "error", interval, range.timeZone().getId(), null, "时间分布执行失败");
     }
+  }
+
+  private QueryResponse execute(QueryExecutionRequest execution, String part) {
+    Set<String> localOperators = new LinkedHashSet<>();
+    QueryResponse response;
+    try (Hook.Closeable ignored =
+        Hook.PLAN_BEFORE_IMPLEMENTATION.addThread(
+            (RelRoot root) ->
+                localOperators.addAll(SearchPushdownWarnings.localOperators(root.rel)))) {
+      response = queries.execute(execution);
+    }
+    if (response.getError() == null && !localOperators.isEmpty()) {
+      var warnings = new ArrayList<>(response.getWarnings());
+      warnings.add(
+          new Warning(
+              "PUSHDOWN_INCOMPLETE",
+              "查询未完全下推，部分操作在本地执行，可能影响性能",
+              part + "未下推的算子：" + String.join(", ", localOperators)));
+      response.setWarnings(List.copyOf(warnings));
+    }
+    return response;
   }
 
   private static void checkResponse(QueryResponse response) {
