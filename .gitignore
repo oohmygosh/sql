@@ -20,7 +20,8 @@ src/_site/node_modules
 src/site-server/node_modules
 *~
 .local-*
-/out/
+# IDE compiler output in the root project and subprojects
+out/
 .gradle/
 build/
 gen/

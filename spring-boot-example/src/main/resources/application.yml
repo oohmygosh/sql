@@ -10,6 +10,10 @@ logging:
 
 unified-query:
   default-data-source: logs
+  ui:
+    default-tables:
+      logs: ${ES_TEST_INDEX:logevent-*}
+      analytics: ${CLICKHOUSE_TEST_TABLE:log_event}
   data-sources:
     logs:
       type: elasticsearch

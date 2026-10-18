@@ -1,19 +1,32 @@
 # Elasticsearch / ClickHouse 查询示例
 
-这个 Java 21、Spring Boot 3 示例应用通过同一个 `UnifiedQueryService` 查询 Elasticsearch 和 ClickHouse，提供 SQL/PPL 的 Web 查询导出。运行 `QueryApplication` 或打包后的 JAR 即可启动 Web 服务，默认端口为 `8080`。
+这个 Java 21、Spring Boot 3 示例应用通过同一个 `UnifiedQueryService` 查询 Elasticsearch 和 ClickHouse，提供 SQL/PPL 的 JSON 查询和 CSV 导出。运行 `QueryApplication` 或打包后的 JAR 即可启动 Web 服务，默认端口为 `8080`。
+
+## 搜索前端
+
+示例已集成 Lens 搜索页面，启动后访问 `http://localhost:8080/`。前端源码位于 [`frontend/`](frontend/README.md)，沿用紧凑的一屏布局；SQL/PPL、动态字段与详情、查询历史、CSV 和异步导出均已接入。
+
+构建示例需要 Node.js 20.19+ 或 22.12+ 和 npm。原有 `:spring-boot-example:bootJar` 会自动安装锁定的前端依赖、构建页面并打包到 JAR。运行 JAR 不需要 Node.js。IDE 直接启动前先执行 `:spring-boot-example:processResources`，或按前端 README 启动 Vite 开发服务器。
+
+页面通过 `GET /ui/config` 获取已配置数据源的名称、类型和默认表名，不暴露连接地址与凭据。默认表分别为 `logevent-*` 和 `log_event`，可用 `ES_TEST_INDEX` / `CLICKHOUSE_TEST_TABLE` 或 `unified-query.ui.default-tables` 覆盖，也可直接在页面输入。表名控件用于生成快捷语句，编辑器中的 SQL/PPL 原文提交。
+
+**分页、字段筛选和时间图目前仅处理本次返回的数据，不能作为全表统计。** 普通查询沿用服务端返回上限；导出重新执行上次成功查询，不包含页面本地筛选。尚未接入的表发现、服务端分页、全量趋势、可视条件编译和查询取消，见前端 README 的能力范围。这次集成仅修改示例模块。
 
 ## 代码结构
 
 ```text
 org.opensearch.sql.example
 ├── QueryApplication                # Spring Boot 入口
-├── controller                      # HTTP 路由、状态码、附件响应
+├── controller                      # HTTP 路由、状态码、JSON/附件响应
+│   ├── QueryController
 │   ├── QueryExportController
 │   └── QueryExportTaskController
-├── service                         # 同步导出、任务调度、进度与文件生命周期
+├── service                         # 查询转换、导出、任务与文件生命周期
+│   ├── QueryService
 │   ├── QueryExportService
 │   └── QueryExportRunner            # service 内部的 QueryRunner 实现
 ├── model                           # 独立请求/返回模型
+│   ├── QueryRequest / QueryResponse / QueryColumn
 │   ├── ExportRequest
 │   ├── ExportSubmission
 │   ├── ExportTaskStatus
@@ -72,6 +85,41 @@ unified-query:
 ```
 
 通过 `--spring.config.additional-location=file:/path/to/application.yml` 载入额外配置；Spring 的标准外部配置覆盖规则同样适用。
+
+## JSON 查询
+
+`POST /query` 接收 `Content-Type: application/json`，请求字段与导出一致：`source` 为配置的数据源名（省略时使用默认数据源），`language` 为大小写不敏感的 `SQL` / `PPL`（省略时为 SQL），`query` 为非空查询文本。
+
+```bash
+curl --fail --request POST 'http://localhost:8080/query' \
+  --header 'Content-Type: application/json' \
+  --data-raw '{"source":"logs","language":"SQL","query":"SELECT count(*) AS total FROM `your_index`"}'
+```
+
+响应示例：
+
+```json
+{
+  "schema": [{"name": "total", "type": "long"}],
+  "datarows": [[42]],
+  "total": 1,
+  "size": 1
+}
+```
+
+`schema` 的名称使用查询别名，`datarows` 各列与 schema 顺序一致；保留 JSON 的 null、对象、数组和数值，时间戳使用引擎输出字符串。若引擎返回非致命提示，响应包含 `warnings`；空结果仍返回 schema，数据行为 `[]`。响应携带执行错误时返回失败，不把部分数据当作成功结果。
+
+`total` 和 `size` 均表示本次返回的数据行数，**不是源表所有匹配记录数**。普通查询沿用 `plugins.query.size_limit`（默认 10,000），显式 `LIMIT` / `head` 仍生效；大结果使用下方异步导出任务接口。
+
+ClickHouse 的 PPL 示例：
+
+```bash
+curl --fail --request POST 'http://localhost:8080/query' \
+  --header 'Content-Type: application/json' \
+  --data-raw '{"source":"analytics","language":"PPL","query":"source=your_table | fields id,timestamp,message | head 10"}'
+```
+
+非法请求、未知数据源及查询语法/语义错误返回 `400`，执行故障返回 `500`；引擎明确报告权限不足或资源限额时分别返回 `403` / `429`。成功响应为 `application/json`，没有 CSV 附件头。
 
 ## Web 查询导出
 

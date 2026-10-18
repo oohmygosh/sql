@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f6f7f9" />
+    <meta name="description" content="Lens 数据搜索工作台 · 专注查询、筛选与探索。" />
+    <title>数据搜索 · Lens</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='12' fill='%230071e3'/%3E%3Ccircle cx='18' cy='18' r='9' fill='none' stroke='white' stroke-width='3'/%3E%3Cpath d='m25 25 6 6' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="主导航">
+        <a class="brand" href="./" aria-label="Lens 首页"><span class="brand-mark"><i></i><i></i></span><span>lens<span class="brand-dot">.</span></span></a>
+        <div class="workspace"><span class="workspace-symbol">L</span><div><strong>我的工作空间</strong><span>Personal workspace</span></div><span class="workspace-dot" title="本地工作空间"></span></div>
+        <p class="nav-heading">工作台</p>
+        <nav class="nav-main">
+          <button class="nav-item active" data-action="home" aria-current="page"><span data-icon="search"></span>数据搜索<span class="nav-shortcut">⌘ K</span></button>
+        </nav>
+        <div class="section-label"><p class="nav-heading">数据源</p><span class="tiny-count">2</span></div>
+        <nav class="nav-sources" aria-label="数据源">
+          <button class="source-nav selected" data-source="logs"><span class="source-logo elastic" data-icon="database"></span><div><strong>Elasticsearch</strong><small>logs</small></div><span class="source-dot"></span></button>
+          <button class="source-nav" data-source="analytics"><span class="source-logo clickhouse" data-icon="columns"></span><div><strong>ClickHouse</strong><small>analytics</small></div><span class="source-dot"></span></button>
+        </nav>
+        <div class="sidebar-bottom"><button class="help-link" data-action="help"><span data-icon="help"></span>使用指南<span data-icon="arrow-up-right"></span></button><div class="profile"><span class="avatar">L</span><div><strong>Lee</strong><span>个人工作空间</span></div><span class="profile-status">本地</span></div></div>
+      </aside>
+      <div class="main-shell">
+        <header class="topbar"><div class="breadcrumb"><button class="icon-button mobile-nav-toggle" data-action="menu" aria-label="切换导航"><span data-icon="panel"></span></button><span data-icon="grid"></span><span>工作空间</span><span class="crumb-divider">/</span><strong>数据搜索</strong></div><div class="topbar-end"><span class="demo-badge"><span></span>示例数据</span><button class="icon-button" data-action="help" aria-label="快捷键与帮助"><span data-icon="keyboard"></span></button></div></header>
+        <main id="main-content">
+          <h1 class="sr-only">数据搜索</h1>
+          <section class="query-section" aria-label="查询编辑器">
+            <form id="search-form" class="query-card">
+              <div class="query-toolbar">
+                <div class="segmented" role="tablist" aria-label="查询语言">
+                  <button type="button" role="tab" aria-selected="true" data-mode="sql" class="selected">SQL</button>
+                  <button type="button" role="tab" aria-selected="false" data-mode="ppl">PPL</button>
+                </div>
+                <span class="control-divider"></span>
+                <div class="query-controls">
+                  <label class="select-control"><span data-icon="database"></span><span class="sr-only">数据表</span><select id="dataset-select" aria-label="数据表"><option value="logs">application_logs</option><option value="analytics">request_analytics</option></select><span data-icon="chevron-down"></span></label>
+                  <label class="select-control time-control"><span data-icon="clock"></span><span class="sr-only">时间范围</span><select id="time-select" aria-label="时间范围"><option value="15">最近 15 分钟</option><option value="60" selected>最近 1 小时</option><option value="360">最近 6 小时</option><option value="1440">最近 24 小时</option></select><span data-icon="chevron-down"></span></label>
+                </div>
+                <button type="button" class="history-trigger" data-action="history" aria-label="查询历史" aria-expanded="false" aria-controls="query-history-panel"><span data-icon="history"></span><span>查询历史</span><span data-icon="chevron-down"></span></button>
+              </div>
+              <div class="query-editor-row">
+                <div class="query-input-wrap"><span class="editor-line-number" aria-hidden="true">1</span><label class="sr-only" for="query-input">SQL 查询</label><textarea id="query-input" class="code-input" rows="2" spellcheck="false" aria-label="SQL 查询" placeholder="SELECT * FROM application_logs">SELECT * FROM application_logs</textarea></div>
+                <button type="submit" class="button primary" id="search-button"><span data-icon="play"></span><span>执行查询</span></button>
+              </div>
+              <div class="query-bottom">
+                <div class="quick-queries" aria-label="快捷查询"><span class="quick-label"><span data-icon="bolt"></span>快捷查询</span><button type="button" data-preset="errors">异常数据</button><button type="button" data-preset="slow">慢请求</button><button type="button" data-preset="payment">支付服务</button></div>
+                <div class="editor-actions"><span class="run-hint"><kbd>⌘ ↵</kbd> 执行</span><button type="button" class="icon-button" data-action="clear-query" aria-label="清空查询"><span data-icon="eraser"></span></button></div>
+              </div>
+              <section id="query-history-panel" class="query-history-panel" aria-label="查询历史列表" hidden>
+                <div class="history-heading"><strong>查询历史</strong><span>最近 20 条</span><button type="button" class="icon-button" data-action="close-history" aria-label="关闭查询历史"><span data-icon="x"></span></button></div>
+                <div id="query-history-list" class="query-history-list"></div>
+              </section>
+            </form>
+            <div class="query-error" id="query-error" role="alert" hidden></div>
+            <div class="filter-row"><span class="filter-label" data-icon="filter"></span><div id="filter-chips"></div><button class="add-filter" data-action="filter"><span data-icon="plus"></span>添加筛选</button></div>
+          </section>
+          <section class="overview-card" aria-label="搜索结果分布"><div class="overview-top"><div class="match-summary"><strong id="result-count">1,284</strong><span>条匹配记录</span><span class="summary-divider"></span><span class="query-complete"><span data-icon="check-circle"></span><span id="elapsed">查询完成</span></span></div><div class="chart-legend"><button data-level="INFO"><i class="legend-dot info"></i>Info <span id="info-count"></span></button><button data-level="WARN"><i class="legend-dot warn"></i>Warn <span id="warn-count"></span></button><button data-level="ERROR"><i class="legend-dot error"></i>Error <span id="error-count"></span></button><button class="icon-button" data-action="chart" aria-label="收起趋势图" aria-expanded="true"><span data-icon="chevron-up"></span></button></div></div><div id="chart-area"><div class="chart-head"><span>数据分布</span><span id="chart-granularity">每分钟</span></div><div class="chart-body"><div class="chart-scale"><span id="chart-max">60</span><span id="chart-mid">30</span><span>0</span></div><div class="histogram" id="histogram" role="img" aria-label="当前结果随时间的分布"></div></div><div class="chart-axis" id="chart-axis"></div></div></section>
+          <section class="results-card" aria-label="查询结果"><div class="results-toolbar"><div class="result-tabs" role="tablist" aria-label="结果视图"><button role="tab" class="selected" aria-selected="true" data-view="table"><span data-icon="list"></span>数据<span class="tab-count" id="tab-count">1,284</span></button><button role="tab" aria-selected="false" data-view="json"><span data-icon="code"></span>JSON</button></div><div class="result-tools"><button class="icon-button field-toggle" data-action="fields" aria-label="显示或隐藏字段" aria-expanded="true"><span data-icon="panel"></span></button><span class="tools-divider"></span><button class="text-button" data-action="export"><span data-icon="download"></span><span>导出</span></button><button class="icon-button" data-action="refresh" aria-label="重新执行查询"><span data-icon="refresh"></span></button></div></div><div class="results-body"><aside class="fields-panel" id="fields-panel" aria-label="字段筛选"><div class="field-panel-title"><strong>字段</strong><span>8</span></div><div class="field-search"><span data-icon="search"></span><input id="field-search" placeholder="查找字段" aria-label="查找字段" /></div><p class="field-group-label">常用字段 <span>4</span></p><div id="field-list"></div><div class="field-tip"><span data-icon="bulb"></span><p>点击字段，探索它的值。<br />添加条件，让搜索更精确。</p></div></aside><div class="data-panel"><div class="table-scroll" id="table-view"><table><thead><tr><th class="expand-col"><span class="sr-only">详情</span></th><th class="time-col"><button id="sort-time">时间<span data-icon="arrow-down"></span></button></th><th class="level-col">级别</th><th class="service-col">服务</th><th>消息</th></tr></thead><tbody id="results-rows"></tbody></table></div><div class="json-view" id="json-view" hidden><pre id="json-content"></pre></div><div class="empty-state" id="empty-state" hidden><span data-icon="search"></span><h3>暂时没有匹配的数据</h3><p>试试其他关键词，或放宽筛选条件。</p><button class="button secondary" data-action="reset">清除查询条件</button></div><footer class="result-footer"><span id="page-summary"></span><div class="pagination"><label><span class="sr-only">每页条数</span><select id="page-size"><option value="auto" selected>自适应</option><option value="8">8 条 / 页</option><option value="20">20 条 / 页</option><option value="50">50 条 / 页</option></select></label><button class="icon-button" id="prev-page" aria-label="上一页"><span data-icon="chevron-left"></span></button><span id="page-number">1</span><button class="icon-button" id="next-page" aria-label="下一页"><span data-icon="chevron-right"></span></button></div></footer></div></div></section>
+          <footer class="page-footer"><span><span class="footer-dot"></span>专注每一次发现</span><span>Lens <span class="footer-version">/</span> 数据探索工作台</span></footer>
+        </main>
+      </div>
+    </div>
+    <dialog id="modal"><div class="modal-heading"><div><span class="modal-eyebrow" id="modal-eyebrow">LENS WORKSPACE</span><h2 id="modal-title"></h2></div><button class="icon-button" data-action="close-modal" aria-label="关闭弹窗"><span data-icon="x"></span></button></div><div id="modal-content"></div></dialog>
+    <dialog id="detail-drawer" class="detail-drawer" aria-labelledby="detail-title"><div class="drawer-heading"><div><span class="modal-eyebrow">RECORD DETAIL</span><h2 id="detail-title">记录详情</h2></div><button class="icon-button" data-action="close-detail" aria-label="关闭详情"><span data-icon="x"></span></button></div><div id="detail-content"></div></dialog>
+    <div id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

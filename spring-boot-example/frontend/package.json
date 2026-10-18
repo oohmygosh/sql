@@ -1,0 +1,23 @@
+{
+  "name": "unified-query-search-ui",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test test/*.test.js",
+    "test:browser": "node test/browser.mjs"
+  },
+  "dependencies": {
+    "lossless-json": "4.3.2"
+  },
+  "devDependencies": {
+    "playwright": "1.60.0",
+    "vite": "8.3.4"
+  }
+}

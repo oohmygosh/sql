@@ -1,0 +1,16 @@
+node_modules/
+dist/
+
+# Local environment settings; keep shareable templates versioned
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# Package manager logs and browser test output
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+playwright-report/
+test-results/
