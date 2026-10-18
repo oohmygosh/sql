@@ -6,7 +6,6 @@
 package org.opensearch.sql.example.controller;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -36,7 +35,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 @RestController
-@RequestMapping("/query/export/tasks")
+@RequestMapping("/search/export/tasks")
 public class QueryExportTaskController {
   private final QueryExportService exports;
 
@@ -47,10 +46,13 @@ public class QueryExportTaskController {
   @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
   public ResponseEntity<ExportSubmission> submit(
       @RequestBody ExportRequest request, java.security.Principal principal) {
-    String id =
-        exports.submit(request.source(), request.language(), request.query(), owner(principal));
+    String id = exports.submit(request, owner(principal));
     return ResponseEntity.accepted()
-        .location(URI.create("/query/export/tasks/" + id))
+        .location(
+            org.springframework.web.servlet.support.ServletUriComponentsBuilder.fromCurrentRequest()
+                .path("/{id}")
+                .buildAndExpand(id)
+                .toUri())
         .body(new ExportSubmission(id));
   }
 

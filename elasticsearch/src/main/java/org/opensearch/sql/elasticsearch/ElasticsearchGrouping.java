@@ -42,6 +42,9 @@ public final class ElasticsearchGrouping {
           Map.of("terms", Map.of("field", field.name(), "missing_bucket", true)), null);
     }
     if (!(expression instanceof RexCall call)) return null;
+    if (call.getOperator().getName().equals("SEARCH_TIME_BUCKET")) {
+      return searchTimeBucket(call, fields);
+    }
     boolean span = call.getOperator() == PPLBuiltinOperators.SPAN;
     boolean bin = call.getOperator() == PPLBuiltinOperators.SPAN_BUCKET;
     if ((!span && !bin)
@@ -124,6 +127,42 @@ public final class ElasticsearchGrouping {
     return List.of(
             SqlTypeName.TINYINT, SqlTypeName.SMALLINT, SqlTypeName.INTEGER, SqlTypeName.BIGINT)
         .contains(type);
+  }
+
+  /** Search charts use business calendar boundaries without changing PPL's UTC span semantics. */
+  private static ElasticsearchGrouping searchTimeBucket(RexCall call, List<Field> fields) {
+    if (call.getOperands().size() != 3
+        || !(call.getOperands().get(0) instanceof RexInputRef ref)
+        || !(call.getOperands().get(1) instanceof RexLiteral interval)
+        || !(call.getOperands().get(2) instanceof RexLiteral zone)
+        || interval.isNull()
+        || zone.isNull()) return null;
+    Field field = fields.get(ref.getIndex());
+    if (field.sqlType() != SqlTypeName.TIMESTAMP || !field.supportsExistence()) return null;
+    String width = interval.getValueAs(String.class);
+    if (!List.of("1m", "1h", "1d").contains(width)) return null;
+    String timeZone = zone.getValueAs(String.class);
+    try {
+      java.time.ZoneId parsed = java.time.ZoneId.of(timeZone).normalized();
+      if (parsed instanceof java.time.ZoneOffset offset) {
+        timeZone = offset.getTotalSeconds() == 0 ? "UTC" : offset.getId();
+      }
+    } catch (java.time.DateTimeException e) {
+      return null;
+    }
+    return new ElasticsearchGrouping(
+        Map.of(
+            "date_histogram",
+            Map.of(
+                "field",
+                field.name(),
+                "calendar_interval",
+                width,
+                "time_zone",
+                timeZone,
+                "missing_bucket",
+                true)),
+        null);
   }
 
   private static ElasticsearchGrouping timeSpan(Field field, RexLiteral width, RexLiteral unit) {

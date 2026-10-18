@@ -10,6 +10,14 @@ logging:
 
 unified-query:
   default-data-source: logs
+  search:
+    max-page-size: 1000
+    max-offset: 100000
+    max-buckets: 2000
+    default-time-zone: Asia/Shanghai
+    time-fields:
+      logs: timestamp
+      analytics: timestamp
   ui:
     default-tables:
       logs: ${ES_TEST_INDEX:logevent-*}

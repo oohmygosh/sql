@@ -24,7 +24,9 @@ import org.apache.calcite.tools.Planner;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.sql.api.parser.UnifiedQueryParser;
+import org.opensearch.sql.ast.tree.Relation;
 import org.opensearch.sql.ast.tree.UnresolvedPlan;
+import org.opensearch.sql.calcite.CalcitePlanContext;
 import org.opensearch.sql.calcite.CalciteRelNodeVisitor;
 import org.opensearch.sql.common.antlr.SyntaxCheckException;
 import org.opensearch.sql.common.error.ErrorReport;
@@ -65,11 +67,15 @@ public class UnifiedQueryPlanner {
    * @return a logical plan representing the query
    */
   public RelNode plan(String query) {
+    return plan(query, null);
+  }
+
+  private RelNode plan(String query, QueryExecutionRequest request) {
     try {
       return context.measure(
           ANALYZE,
           () -> {
-            RelNode plan = strategy.plan(query);
+            RelNode plan = strategy.plan(query, request);
             for (var shuttle : context.getLangSpec().postAnalysisRules()) {
               plan = plan.accept(shuttle);
             }
@@ -102,9 +108,17 @@ public class UnifiedQueryPlanner {
     }
   }
 
+  /** Plans the original statement once, then applies typed source and output constraints. */
+  public RelNode plan(QueryExecutionRequest request) {
+    if (request.language() != context.getPlanContext().queryType)
+      throw new IllegalArgumentException("Request language does not match the planner context");
+    return QueryExecutionPlan.applyOutput(
+        plan(request.query(), request), request, context.getPlanContext().relBuilder);
+  }
+
   /** Strategy interface for language-specific planning logic. */
   private interface PlanningStrategy {
-    RelNode plan(String query) throws Exception;
+    RelNode plan(String query, QueryExecutionRequest request) throws Exception;
   }
 
   /** ANSI SQL planning using Calcite's native SqlParser → SqlValidator → SqlToRelConverter. */
@@ -113,7 +127,7 @@ public class UnifiedQueryPlanner {
     private final UnifiedQueryContext context;
 
     @Override
-    public RelNode plan(String query) throws Exception {
+    public RelNode plan(String query, QueryExecutionRequest request) throws Exception {
       try (Planner planner = Frameworks.getPlanner(context.getPlanContext().config)) {
         SqlNode parsed = planner.parse(query);
         if (!parsed.isA(SqlKind.QUERY)) {
@@ -129,7 +143,10 @@ public class UnifiedQueryPlanner {
 
         SqlNode validated = planner.validate(rewritten);
         RelRoot relRoot = planner.rel(validated);
-        return relRoot.project();
+        RelNode plan = relRoot.project();
+        return QueryExecutionPlan.hasSourceConstraints(request)
+            ? QueryExecutionPlan.bindSource(plan, request)
+            : plan;
       }
     }
   }
@@ -148,10 +165,57 @@ public class UnifiedQueryPlanner {
     }
 
     @Override
-    public RelNode plan(String query) {
+    public RelNode plan(String query, QueryExecutionRequest request) {
       UnresolvedPlan ast = parser.parse(query);
-      RelNode logical = relNodeVisitor.analyze(ast, context.getPlanContext());
-      return preserveCollation(logical);
+      if (!QueryExecutionPlan.hasSourceConstraints(request))
+        return preserveCollation(relNodeVisitor.analyze(ast, context.getPlanContext()));
+      validateSourceShape(ast);
+      var visitor = new SourceConstrainedVisitor(request);
+      RelNode logical = visitor.analyze(ast, context.getPlanContext());
+      if (visitor.sources != 1)
+        throw new IllegalArgumentException("External conditions require exactly one source table");
+      if (request.histogram() != null && hasHistogramReduction(ast))
+        throw new UnsupportedHistogramException();
+      return preserveCollation(
+          QueryExecutionPlan.bindValidatedSource(logical, request, visitor.source));
+    }
+
+    private void validateSourceShape(UnresolvedPlan plan) {
+      if (plan.getChild().size() > 1)
+        throw new IllegalArgumentException("External conditions require a single source query");
+      for (var child : plan.getChild())
+        if (child instanceof UnresolvedPlan nested) validateSourceShape(nested);
+    }
+
+    private boolean hasHistogramReduction(UnresolvedPlan plan) {
+      if (plan instanceof org.opensearch.sql.ast.tree.Aggregation
+          || plan instanceof org.opensearch.sql.ast.tree.Dedupe
+          || plan instanceof org.opensearch.sql.ast.tree.Window) return true;
+      for (var child : plan.getChild())
+        if (child instanceof UnresolvedPlan nested && hasHistogramReduction(nested)) return true;
+      return false;
+    }
+
+    private static class SourceConstrainedVisitor extends CalciteRelNodeVisitor {
+      private final QueryExecutionRequest request;
+      private int sources;
+      private QueryExecutionPlan.SourceTable source;
+
+      SourceConstrainedVisitor(QueryExecutionRequest request) {
+        super(new EmptyDataSourceService());
+        this.request = request;
+      }
+
+      @Override
+      public RelNode visitRelation(Relation relation, CalcitePlanContext planContext) {
+        if (++sources != 1 || relation.getTableNames().size() != 1)
+          throw new IllegalArgumentException("External conditions require a single source query");
+        RelNode source = super.visitRelation(relation, planContext);
+        // Validate before user operators can eliminate the scan. Bind after analysis so existing
+        // visitors can still inspect source table metadata, such as query_string field mappings.
+        this.source = QueryExecutionPlan.validateSource(source, request);
+        return source;
+      }
     }
 
     private RelNode preserveCollation(RelNode logical) {

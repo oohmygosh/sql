@@ -41,14 +41,28 @@ export async function request(path, { body, signal, blob = false } = {}) {
 }
 
 export function normalizeResponse(data) {
-  if (!data || !Array.isArray(data.schema) || !Array.isArray(data.datarows)
-      || data.schema.some(column => !column || typeof column.name !== 'string' || typeof column.type !== 'string')
-      || data.datarows.some(row => !Array.isArray(row) || row.length !== data.schema.length)) {
-    throw new Error('查询响应格式不符合 schema / datarows 契约。');
+  if (!data || typeof data !== 'object') throw new Error('搜索响应格式无效。');
+  let rows;
+  if (data.rows !== undefined) {
+    const result = data.rows;
+    if (!Array.isArray(result?.schema) || !Array.isArray(result?.datarows)
+        || result.schema.some(column => !column || typeof column.name !== 'string' || typeof column.type !== 'string')
+        || result.datarows.some(row => !Array.isArray(row) || row.length !== result.schema.length)) {
+      throw new Error('查询响应格式不符合 rows.schema / datarows 契约。');
+    }
+    if (!data.page || !Number.isInteger(Number(data.page.number)) || Number(data.page.number) < 1
+        || !Number.isInteger(Number(data.page.size)) || Number(data.page.size) < 1 || typeof data.page.hasNext !== 'boolean') {
+      throw new Error('搜索响应缺少有效的后台分页信息。');
+    }
+    rows = { schema: result.schema, rows: result.datarows.map((values, index) => ({ index, values })) };
   }
-  return {
-    schema: data.schema,
-    rows: data.datarows.map((values, index) => ({ index, values })),
-    warnings: Array.isArray(data.warnings) ? data.warnings : [],
-  };
+  if (data.histogram?.status === 'ok' && (!Array.isArray(data.histogram.buckets)
+      || data.histogram.buckets.some(bucket => !Number.isFinite(Date.parse(bucket.from))
+        || !Number.isFinite(Date.parse(bucket.to)) || Date.parse(bucket.to) <= Date.parse(bucket.from)
+        || !Number.isFinite(Number(bucket.count)) || Number(bucket.count) < 0))) {
+    throw new Error('时间分布响应缺少有效的桶边界或计数。');
+  }
+  return { rows, page: data.page && { number: Number(data.page.number), size: Number(data.page.size), hasNext: data.page.hasNext },
+    histogram: data.histogram, resolvedTimeRange: data.resolvedTimeRange,
+    warnings: Array.isArray(data.warnings) ? data.warnings : [], errors: data.errors };
 }

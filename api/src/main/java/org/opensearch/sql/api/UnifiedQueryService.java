@@ -60,6 +60,21 @@ public final class UnifiedQueryService {
       throw new IllegalArgumentException("Unknown or unspecified data source: " + name);
   }
 
+  public ExecutionEngine.QueryResponse execute(QueryExecutionRequest request) {
+    return run(request, false, null, null, null);
+  }
+
+  public ExecutionEngine.ExplainResponse explain(QueryExecutionRequest request) {
+    return run(request, true, null, null, null);
+  }
+
+  public List<Warning> stream(
+      QueryExecutionRequest request, QueryRowConsumer consumer, QueryCancellation cancellation) {
+    Objects.requireNonNull(consumer, "consumer");
+    Objects.requireNonNull(cancellation, "cancellation").check();
+    return run(request, false, null, consumer, cancellation);
+  }
+
   public ExecutionEngine.QueryResponse execute(String source, QueryType language, String query) {
     return run(source, language, query, false, null);
   }
@@ -110,11 +125,27 @@ public final class UnifiedQueryService {
       org.opensearch.sql.ast.tree.HighlightConfig highlight,
       QueryRowConsumer consumer,
       QueryCancellation cancellation) {
+    return run(
+        new QueryExecutionRequest(source, language, query),
+        explain,
+        highlight,
+        consumer,
+        cancellation);
+  }
+
+  @SuppressWarnings("unchecked")
+  private <T> T run(
+      QueryExecutionRequest request,
+      boolean explain,
+      org.opensearch.sql.ast.tree.HighlightConfig highlight,
+      QueryRowConsumer consumer,
+      QueryCancellation cancellation) {
+    String source = request.source();
     String name = source != null ? source : defaultBackend;
     QueryBackend backend = name == null ? null : backends.get(name);
     if (backend == null)
       throw new IllegalArgumentException("Unknown or unspecified data source: " + name);
-    Objects.requireNonNull(query, "query");
+
     if (highlight != null && !backend.supportsHighlight())
       throw new UnsupportedOperationException("Highlight is not supported by " + backend.type());
     try (Hook.Closeable ignored =
@@ -122,14 +153,18 @@ public final class UnifiedQueryService {
             (RelOptPlanner planner) -> backend.rules().forEach(planner::addRule))) {
       UnifiedQueryContext.Builder builder =
           UnifiedQueryContext.builder()
-              .language(language)
+              .language(request.language())
               .catalogFactory(name, backend::createSchema)
               .defaultNamespace(
                   name + (backend.defaultSchema().isEmpty() ? "" : "." + backend.defaultSchema()));
       settings.forEach(builder::setting);
+      // Structured queries own an explicit bounded output window or bounded bucket count.
+      if (request.window() != null || request.histogram() != null)
+        builder.setting("plugins.query.size_limit", Integer.MAX_VALUE);
       try (UnifiedQueryContext context = builder.build()) {
         context.getPlanContext().setHighlightConfig(highlight);
-        RelNode plan = new UnifiedQueryPlanner(context).plan(query);
+        RelNode plan = new UnifiedQueryPlanner(context).plan(request);
+        boolean unordered = request.window() != null && !QueryExecutionPlan.hasOrdering(plan);
         for (var rule : context.getLangSpec().preCompilationRules()) plan = plan.accept(rule);
         plan = backend.normalizePlan(plan);
         if (consumer != null) {
@@ -164,7 +199,13 @@ public final class UnifiedQueryService {
                   plan,
                   context.getPlanContext(),
                   (ResponseListener<ExecutionEngine.QueryResponse>) listener);
-        return result.join();
+        T response = result.join();
+        if (unordered && response instanceof ExecutionEngine.QueryResponse rows) {
+          var warnings = new java.util.ArrayList<>(rows.getWarnings());
+          warnings.add(new Warning("UNSTABLE_ORDER", "查询未指定稳定排序，翻页结果可能变化", null));
+          rows.setWarnings(List.copyOf(warnings));
+        }
+        return response;
       }
     } catch (CompletionException e) {
       if (e.getCause() instanceof RuntimeException cause) throw cause;

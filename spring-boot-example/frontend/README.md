@@ -1,8 +1,8 @@
-# Lens 查询前端
+# Lens 搜索前端
 
-保留 `search-ui` 原型的紧凑布局，使用原生 JavaScript ES Modules 和 Vite。真实调用示例应用的 HTTP 接口，不生成模拟数据，不解析或改写用户输入的 SQL / PPL。
+保留 `search-ui` 原型的紧凑布局，使用原生 JavaScript ES Modules 与 Vite。生产入口位于本目录；`search-ui/` 仅为独立静态设计原型。SQL / PPL 原文和结构化条件交给后端执行。
 
-## 开发
+## 开发与打包
 
 需要 Node.js 20.19+ 或 22.12+，以及已启动的 Spring Boot 示例：
 
@@ -12,50 +12,48 @@ npm ci
 npm run dev
 ```
 
-打开 `http://127.0.0.1:5173/`。开发服务器把 `/query`、`/ui` 转发到 `http://127.0.0.1:8080`。其他端口可设置：
+打开 `http://127.0.0.1:5173/`，开发和预览服务器把 `/search`、`/ui` 转发到 `http://127.0.0.1:8080`。其他后端地址可设置 `QUERY_API_TARGET=http://127.0.0.1:8081 npm run dev`。`npm run build` 生成 `dist/`；`npm run preview` 使用 5174 端口。
 
-```bash
-QUERY_API_TARGET=http://127.0.0.1:8081 npm run dev
+仓库根目录执行 `./gradlew :spring-boot-example:bootJar`，会安装依赖、构建前端，并将 `dist/` 放入 JAR 的 `static/`。启动 JAR 后访问应用根路径。IDE 启动 Java 前先执行 `:spring-boot-example:processResources`，或使用 Vite。浏览器接口采用相对路径，支持应用上下文路径。
+
+## 查询行为
+
+- `POST /search` 提交 `source、language、query、timeRange、filters、page、histogram、include`。语句中的表名是唯一查询来源，默认表配置仅用于快捷模板；模板不自动添加 `LIMIT/head`。
+- 时间字段、时间范围、业务时区位于查询输入区。绝对时间需填写带时区的 ISO 字符串；时间范围为 `[from,to)`。后端返回 `resolvedTimeRange` 后，翻页和导出复用该固定范围。
+- 字段筛选采用 `eq/ne/gt/gte/lt/lte/in/is_null/is_not_null/contains`，按 AND 提交。数值和布尔字段按配置类型提交；`in` 输入 JSON 数组。`contains` 按字符串字面量包含处理。
+- 页码和每页条数全部在后台执行，使用 `hasNext` 判断下一页，不用当前页行数代表总命中数。自适应只计算条数，防抖后请求后台；相同条数不重复执行。
+- 翻页仅请求 `include:["rows"]`，保留原有图表。图表直接使用后台 `histogram.buckets:[{from,to,count}]`，不会从明细行推导计数；不支持和执行失败分别显示原因。点击桶提交其绝对时间范围并回到第一页。
+- 编辑语句、时间或筛选会重置页码。手工编辑等待执行；筛选应用、时间预设和桶点击直接搜索。保留请求中止和版本检查，防止旧响应覆盖新条件。
+- 历史记录保存语句、数据源、时间范围和筛选，最近 20 条保存在浏览器；载入后手动执行。相对范围在重新搜索时重新解析。
+- 结果表格、详情和 JSON 保留列顺序、重复别名、null、嵌套值和精确数值。
+
+`GET /ui/config` 提供数据源显示配置和顶层 `maxPageSize`，前端按该上限约束自适应条数并禁用超限选项。每个 source 可包括 `table`（快捷模板默认表）、`timeField`、`timeZone` 和 `sourceFields:[{name,type}]`。字段面板将配置源字段与结果列/别名分开；结果列不能直接点击生成源筛选。未配置字段时，可在筛选框显式输入源字段名，后端负责校验。时间字段可以显式填写，不依赖该列出现在查询结果中。
+
+## PPL 语法补全
+
+PPL 模式首次加载 `GET /ui/ppl/grammar`，使用后端当前引擎的 ANTLR 语法包在浏览器本地计算候选。语法包在当前页面缓存，升级后刷新页面即可使用新语法；SQL 模式不加载它。输入或移动光标会更新建议，`Ctrl+Space` 可手动触发，方向键选择、`Enter/Tab` 插入、`Escape` 关闭，也可点击候选；`⌘/Ctrl+Enter` 仍执行查询。组合输入期间暂停提示。
+
+完整语句末尾停止提示尚需参数的续写词，例如 `head 10` 后不再弹出 `from`，`stats count()` 后不再弹出 `as/by`。继续编写时先输入 `|` 或下一词的前缀；例如输入 ` a` 后可补全 `as`，插入时会补上单词分隔空格。数值不会被当成字段前缀，已完整输入的表名或字段不会重复提示自身。
+
+命令、关键字和函数来自语法；表名来自当前 source 的 `table`，源字段来自 `sourceFields` 和 `timeField`。只有语句主表与配置表一致时才显示这些字段；其他表、多表查询和别名不推导字段，也不使用结果列冒充源字段。不包含实时语法错误诊断。
+
+在示例应用配置中填写已知源字段，例如：
+
+```yaml
+unified-query:
+  ui:
+    source-fields:
+      logs:
+        - name: message
+          type: string
+        - name: level
+          type: string
 ```
 
-只构建前端：`npm run build`；产物在 `dist/`。`npm run preview` 使用 5174 端口，并使用相同的接口代理配置。
+提示加载失败会在编辑器旁显示状态，不影响查询；`Ctrl+Space` 可重试。表名、字段名会按 PPL 标识符规则转义，接受补全只修改当前词或标识符，保留光标后的语句。
 
-## 随示例打包
+## 导出
 
-仓库根目录运行 `./gradlew :spring-boot-example:bootJar`，会依次执行 `npm ci`、`npm run build`，将 `dist/` 放进 JAR 的 `static/`。启动 JAR 后直接访问应用根路径。开发依赖不会进入 JAR；部署机器只需要 Java。
+同步 CSV 使用 `POST /search/export`；异步使用 `POST /search/export/tasks`、`GET /search/export/tasks/{id}` 和 `GET /search/export/tasks/{id}/file`。两者都使用最后一次成功查询的完整冻结上下文，包含绝对时间与 filters，保留用户 `LIMIT/head`，不包含 UI 的 `page/histogram/include`。
 
-IDE 直接启动 Java 入口前，需要先运行 `:spring-boot-example:processResources`，或使用独立 Vite 开发服务器。前端请求使用相对路径，支持 Spring Boot servlet context path；开发模式代理目标应指向对应后端上下文。
-
-## 能力范围
-
-| 功能 | 当前接入方式 |
-| --- | --- |
-| SQL / PPL 查询 | `POST /query`，原文提交，支持引擎已有语法 |
-| 数据源 | `GET /ui/config`，仅返回名称、类型、默认表名，不返回连接配置 |
-| 表 / 索引 | 手动输入，用于生成快捷查询；手写 SQL/PPL 以语句为准 |
-| 字段、表格、详情、JSON | 从 `schema` + `datarows` 动态生成，保留空 schema、嵌套值、null、重复别名和精确数值 |
-| 分页、字段值、筛选、时间范围、柱状图 | 浏览器处理本次响应，不代表全表命中数；大结果仍受普通查询上限约束 |
-| 查询历史 | 成功查询保存在当前浏览器，最多 20 条；载入后手动执行 |
-| 直接 CSV | `POST /query/export`，重新执行上次成功查询 |
-| 异步 CSV | 提交 `/query/export/tasks`、轮询状态、成功后从 `/file` 下载；当前任务 ID 保存在浏览器，可刷新恢复 |
-| 停止等待 | 中止浏览器请求；不能取消服务端查询 |
-
-时间字段优先选择 `timestamp` / `@timestamp` 等常见名称，否则选择 timestamp/date 类型。没有可解析的时间就显示提示；无时区字符串按浏览器本地时区解释。图表纵轴统计**返回行数**，不会把聚合结果的 `total` 自动当作日志条数。最近时间范围以当前时间为准。
-
-导出重新执行上次成功查询，保留原有 `LIMIT` / `head`，不包含本地筛选。异步下载直接使用服务端附件链接，不将大文件全部读入浏览器内存。暂停刷新仅停止状态轮询，不取消任务。任务过期或服务重启后需要重新创建。
-
-尚待后续评估：表/索引与完整字段元数据发现、游标分页、全量趋势与命中总数、把可视筛选安全编译为任意 SQL/PPL 条件、查询取消、共享历史和鉴权。这些能力未通过修改引擎或猜测数据补齐。
-
-## 验证
-
-```bash
-npm test                 # 数据契约、精度、筛选、时间桶、快捷语句
-npm run build
-npx playwright install chromium  # 首次运行浏览器检查
-UI_URL=http://127.0.0.1:8080/ npm run test:browser
-UI_URL=http://127.0.0.1:8080/ node test/browser-contract.mjs
-```
-
-`test:browser` 连接实际示例服务，对已配置的 `logs` / `analytics` 和表中 `id,timestamp,message` 做小规模只读查询，并创建 3 行导出任务。覆盖两个后端、两种语言、详情、筛选、空结果、语法错误、历史和桌面/移动端布局；产物在 `../build/ui-verification/`。测试中的 `log_event` 需与示例表一致。
-
-`browser-contract.mjs` 仅拦截查询响应，验证真实后端不便稳定制造的精度、HTML 转义、warning、429 和请求竞态。它不能替代真实数据源验收。
+异步提交后页面编辑不影响任务。任务 ID 保存在浏览器，刷新可恢复轮询；暂停刷新仅停止浏览器轮询。异步文件使用附件链接直接下载。停止查询等待仅中止浏览器请求，服务端可能继续执行。

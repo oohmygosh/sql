@@ -26,6 +26,47 @@ Together, these components enable complete workflows: parse PPL or SQL queries i
 
 ## Usage
 
+### Structured execution
+
+`UnifiedQueryService.execute`, `explain`, and `stream` accept the same immutable
+`QueryExecutionRequest`. Relative times and UI policies belong to the hosting service;
+this API accepts a resolved absolute `[from, to)` range. Structured time constraints
+support millisecond precision; finer input is rejected explicitly rather than rounded.
+
+```java
+var base = new QueryExecutionRequest(
+    "logs", QueryType.SQL, "SELECT message FROM application_logs ORDER BY timestamp",
+    new QueryExecutionRequest.TimeRange("timestamp", from, to, ZoneId.of("Asia/Shanghai")),
+    List.of(new QueryExecutionRequest.FieldFilter("level", "eq", "ERROR")), null, null);
+
+// Fetch one sentinel row; the host trims it and calculates hasNext.
+var rows = service.execute(base.withWindow(new QueryExecutionRequest.ResultWindow(0, 51)));
+var histogram = service.execute(base.withHistogram(
+    new QueryExecutionRequest.Histogram("timestamp", "1h", ZoneId.of("Asia/Shanghai"))));
+service.stream(base, consumer, cancellation);
+```
+
+External conditions bind to validated source fields immediately above the unique table scan.
+They run before user filters, projections, `head`, calculations and aggregation. Existing
+conditions retain their grouping and position. Unknown fields, mismatched literal types,
+and ambiguous multi-source binding fail explicitly. Operators are `eq`, `ne`, `gt`, `gte`,
+`lt`, `lte`, `in`, `is_null`, `is_not_null`, and literal string `contains`.
+
+A result window wraps the complete user result, including explicit `LIMIT`, offsets, and
+PPL `head`; it never expands that result. Structured windows and histograms use their own
+bounds rather than the interactive response-size setting. Unordered page requests include
+an `UNSTABLE_ORDER` warning; page numbers do not provide a cross-request snapshot.
+
+Histograms use a separate aggregate plan, with `__search_bucket` (UTC `TIMESTAMP`) and
+`__search_count` (`BIGINT`) output columns. They retain source time internally through
+ordinary projections and honor the user's own limits. The intervals `1m`, `1h`, and `1d`
+align to the supplied business time zone, including daylight transitions. The host bounds
+and fills empty buckets. Aggregate, distinct, window, join, and other unsupported plan
+shapes throw `UnsupportedHistogramException`, which hosts can report independently from
+row results. Execution failures remain errors. The internal `SEARCH_TIME_BUCKET` operator
+has matching ES/ClickHouse translation and a Java calendar implementation, without changing
+language-level `span` semantics.
+
 ### UnifiedQueryContext
 
 `UnifiedQueryContext` is a reusable abstraction shared across unified query components (planner, compiler, etc.). It bundles `CalcitePlanContext` and `Settings` into a single object, centralizing configuration for all unified query operations.

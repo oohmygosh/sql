@@ -1,16 +1,16 @@
-# Elasticsearch / ClickHouse 查询示例
+# Elasticsearch / ClickHouse 搜索示例
 
-这个 Java 21、Spring Boot 3 示例应用通过同一个 `UnifiedQueryService` 查询 Elasticsearch 和 ClickHouse，提供 SQL/PPL 的 JSON 查询和 CSV 导出。运行 `QueryApplication` 或打包后的 JAR 即可启动 Web 服务，默认端口为 `8080`。
+这个 Java 21、Spring Boot 3 示例通过 `UnifiedQueryService` 查询 Elasticsearch 和 ClickHouse，提供统一 `/search` HTTP 接口、后台分页、时间分布及流式 CSV 导出。运行 `QueryApplication` 或打包后的 JAR 启动 Web 服务，默认端口 `8080`。
 
 ## 搜索前端
 
-示例已集成 Lens 搜索页面，启动后访问 `http://localhost:8080/`。前端源码位于 [`frontend/`](frontend/README.md)，沿用紧凑的一屏布局；SQL/PPL、动态字段与详情、查询历史、CSV 和异步导出均已接入。
+访问 `http://localhost:8080/` 使用 Lens 搜索页面，源码及前端验证说明见 [`frontend/README.md`](frontend/README.md)。页面提交 SQL/PPL 原文、时间和结构化筛选；表名以语句为准，默认模板不自动添加 `LIMIT/head`。分页在后台执行，翻页只请求明细并保留图表。图表直接使用后台桶数据，点击桶缩小时间范围。查询历史保存完整条件，导出复用最后一次成功查询的固定时间与筛选。
 
-构建示例需要 Node.js 20.19+ 或 22.12+ 和 npm。原有 `:spring-boot-example:bootJar` 会自动安装锁定的前端依赖、构建页面并打包到 JAR。运行 JAR 不需要 Node.js。IDE 直接启动前先执行 `:spring-boot-example:processResources`，或按前端 README 启动 Vite 开发服务器。
+`GET /ui/config` 仅提供数据源名称、类型、默认表、时间字段/时区及显式配置的源字段，并提供顶层 `maxPageSize`，不暴露连接地址和凭据。默认表为 `logevent-*` / `log_event`，可通过 `ES_TEST_INDEX` / `CLICKHOUSE_TEST_TABLE` 或 `unified-query.ui.default-tables` 覆盖。它们仅用于生成快捷语句；界面没有独立的表名输入框。字段面板区分源字段与结果列/别名，结果别名不能直接生成源字段筛选。
 
-页面通过 `GET /ui/config` 获取已配置数据源的名称、类型和默认表名，不暴露连接地址与凭据。默认表分别为 `logevent-*` 和 `log_event`，可用 `ES_TEST_INDEX` / `CLICKHOUSE_TEST_TABLE` 或 `unified-query.ui.default-tables` 覆盖，也可直接在页面输入。表名控件用于生成快捷语句，编辑器中的 SQL/PPL 原文提交。
+`GET /ui/ppl/grammar` 返回当前引擎的 PPL 语法包，供前端在浏览器中计算语法提示。响应沿用 `/_plugins/_ppl/_grammar` 的 JSON 结构，包括 ANTLR 版本、语法 hash、lexer/parser ATN、词表及补全规则；无需查询参数，也不访问 Elasticsearch 或 ClickHouse。表名和源字段提示使用 `/ui/config` 的显式配置。
 
-**分页、字段筛选和时间图目前仅处理本次返回的数据，不能作为全表统计。** 普通查询沿用服务端返回上限；导出重新执行上次成功查询，不包含页面本地筛选。尚未接入的表发现、服务端分页、全量趋势、可视条件编译和查询取消，见前端 README 的能力范围。这次集成仅修改示例模块。
+构建需要 Node.js 20.19+ 或 22.12+ 和 npm。`:spring-boot-example:bootJar` 自动安装锁定依赖、构建前端并打包到 JAR；运行 JAR 不需要 Node.js。IDE 直接启动前执行 `:spring-boot-example:processResources`，或独立运行 Vite。请求和异步任务链接支持 Spring servlet context path。
 
 ## 代码结构
 
@@ -18,35 +18,36 @@
 org.opensearch.sql.example
 ├── QueryApplication                # Spring Boot 入口
 ├── controller                      # HTTP 路由、状态码、JSON/附件响应
-│   ├── QueryController
+│   ├── SearchController
+│   ├── SearchUiController
 │   ├── QueryExportController
 │   └── QueryExportTaskController
-├── service                         # 查询转换、导出、任务与文件生命周期
-│   ├── QueryService
-│   ├── QueryExportService
-│   └── QueryExportRunner            # service 内部的 QueryRunner 实现
-├── model                           # 独立请求/返回模型
-│   ├── QueryRequest / QueryResponse / QueryColumn
-│   ├── ExportRequest
-│   ├── ExportSubmission
-│   ├── ExportTaskStatus
-│   └── ExportDownload
+├── service
+│   ├── SearchService               # 时间解析、分页与图表编排
+│   ├── SearchTimeResolver
+│   ├── QueryExportService          # 导出任务、容量、文件生命周期
+│   └── QueryExportRunner           # 流式逐行写入
+├── model
+│   ├── SearchRequest / SearchResponse / QueryColumn
+│   ├── ExportRequest / ExportSubmission
+│   └── ExportTaskStatus / ExportDownload
 └── config
+    ├── SearchProperties
     └── QueryExportProperties
 ```
 
-Controller 只适配 HTTP，Service 调用统一查询和任务服务。公共请求/返回模型不再嵌在 Controller 或 Service 中；任务注册项、写入进度等实现内部状态仍由对应 service 类私有持有。测试目录按相同分包组织。
+Controller 适配 HTTP；`SearchService` 协调页面策略；统一 API 用类型化表达式和计划节点绑定源字段、组合条件、生成结果窗口或时间聚合并执行。同步和异步导出共享相同条件绑定与流式写入能力。
 
 ## 配置与启动
 
-内置配置位于 `src/main/resources/application.yml`：
+内置配置在 `src/main/resources/application.yml`，默认数据源为 `logs`：
 
-| 数据源名称 | 后端 | 默认连接 | 默认用户 |
+| 数据源 | 后端 | 默认连接 | 默认用户 |
 | --- | --- | --- | --- |
-| `logs`（默认） | Elasticsearch | `http://192.168.100.212:9200` | `elastic` |
+| `logs` | Elasticsearch | `http://192.168.100.212:9200` | `elastic` |
 | `analytics` | ClickHouse | `jdbc:clickhouse://192.168.100.212:18123/default` | `admin` |
 
-建议通过 `ES_PASSWORD` 和 `CLICKHOUSE_PASSWORD` 环境变量为两个后端设置连接密码。在 Bash 中可以隐藏输入：
+通过 `ES_PASSWORD` / `CLICKHOUSE_PASSWORD` 环境变量设置密码，例如在 Bash 隐藏输入：
 
 ```bash
 read -r -s -p 'Elasticsearch password: ' ES_PASSWORD
@@ -56,25 +57,40 @@ printf '\n'
 export ES_PASSWORD CLICKHOUSE_PASSWORD
 ```
 
-可选环境变量包括 `ES_URL`、`ES_USER`、`CLICKHOUSE_JDBC_URL`、`CLICKHOUSE_USER` 和 `CLICKHOUSE_DATABASE`。切换 ClickHouse 数据库时同时调整 JDBC URL 和 `CLICKHOUSE_DATABASE`。
+其他连接变量包括 `ES_URL`、`ES_USER`、`CLICKHOUSE_JDBC_URL`、`CLICKHOUSE_USER` 和 `CLICKHOUSE_DATABASE`。切换 CH 数据库时同时调整 JDBC URL 与数据库配置。解析和函数语义沿用本项目 SQL/PPL 引擎，不直接接受 ClickHouse 原生 SQL 方言。
 
-从仓库根目录构建并启动：
+搜索限制和 UI 字段配置示例：
 
-```bash
-./gradlew :spring-boot-example:bootJar
-JAR=spring-boot-example/build/libs/spring-boot-example-3.10.0.0-SNAPSHOT.jar
-java -jar "$JAR"
+```yaml
+unified-query:
+  search:
+    max-page-size: 1000       # 单页上限；未传 page 时默认第一页、50 条
+    max-offset: 100000       # (number - 1) * size 的上限
+    max-buckets: 2000        # 时间分布桶数上限
+    default-time-zone: Asia/Shanghai
+    time-fields:
+      logs: timestamp
+      analytics: timestamp
+  ui:
+    default-tables:
+      logs: logevent-*
+      analytics: log_event
+    source-fields:
+      logs:
+        - name: timestamp
+          type: timestamp
+        - name: level
+          type: string
+      analytics:
+        - name: id
+          type: long
+        - name: message
+          type: string
 ```
 
-无参数启动即运行 Web 服务，直到应用停止。IDE 中运行 `org.opensearch.sql.example.QueryApplication`，设置相同环境变量即可，无须程序参数。可使用 Spring Boot 标准配置调整端口：
+`timeRange.field` 可显式传入；省略时使用所选数据源的 `time-fields` 配置，否则报错。时区省略时使用 `default-time-zone`。UI `source-fields` 是源字段显示和输入类型配置，不替代后台元数据校验。没有配置源字段时仍可显式填写字段名；结果别名只展示。
 
-```bash
-java -jar "$JAR" --server.port=8081
-```
-
-解析和函数语义沿用项目现有 SQL/PPL 引擎，ClickHouse 原生 SQL 方言不直接作为输入语言。
-
-如需按实际 ES 数据声明数组字段，添加 Spring 配置，例如：
+ES 映射无法识别标量/数组差异，可按实际数据声明数组字段：
 
 ```yaml
 unified-query:
@@ -84,108 +100,127 @@ unified-query:
         tags: array<keyword>
 ```
 
-通过 `--spring.config.additional-location=file:/path/to/application.yml` 载入额外配置；Spring 的标准外部配置覆盖规则同样适用。
-
-## JSON 查询
-
-`POST /query` 接收 `Content-Type: application/json`，请求字段与导出一致：`source` 为配置的数据源名（省略时使用默认数据源），`language` 为大小写不敏感的 `SQL` / `PPL`（省略时为 SQL），`query` 为非空查询文本。
+通过 `--spring.config.additional-location=file:/path/to/application.yml` 加载额外配置。构建并启动：
 
 ```bash
-curl --fail --request POST 'http://localhost:8080/query' \
-  --header 'Content-Type: application/json' \
-  --data-raw '{"source":"logs","language":"SQL","query":"SELECT count(*) AS total FROM `your_index`"}'
+./gradlew :spring-boot-example:bootJar
+JAR=spring-boot-example/build/libs/spring-boot-example-3.10.0.0-SNAPSHOT.jar
+java -jar "$JAR" --server.port=8080
 ```
 
-响应示例：
+IDE 可运行 `org.opensearch.sql.example.QueryApplication`，设置相同环境变量，无需程序参数。
+
+## 搜索 HTTP 协议
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| POST | `/search` | 明细、后台时间分布或两者 |
+| POST | `/search/export` | 同步 CSV 导出 |
+| POST | `/search/export/tasks` | 创建异步导出任务 |
+| GET | `/search/export/tasks/{id}` | 查看任务进度 |
+| GET | `/search/export/tasks/{id}/file` | 下载成功文件 |
+| GET | `/ui/config` | 页面初始化显示配置 |
+| GET | `/ui/ppl/grammar` | 当前引擎的 PPL 语法包 |
+
+请求使用 `Content-Type: application/json`。`query` 必填且非空；`source` 省略时使用默认数据源；`language` 大小写不敏感，省略时为 SQL。
+
+```bash
+curl --fail --request POST 'http://localhost:8080/search' \
+  --header 'Content-Type: application/json' \
+  --data-raw '{"source":"logs","language":"SQL","query":"SELECT timestamp,level,message FROM `your_index` ORDER BY timestamp","timeRange":{"field":"timestamp","from":"now-1d","to":"now","timeZone":"Asia/Shanghai"},"filters":[{"field":"level","operator":"eq","value":"ERROR"}],"page":{"number":1,"size":50},"histogram":{"interval":"auto"},"include":["rows","histogram"]}'
+```
+
+将 `your_index` 替换为实际索引。响应形状如下：
 
 ```json
 {
-  "schema": [{"name": "total", "type": "long"}],
-  "datarows": [[42]],
-  "total": 1,
-  "size": 1
+  "resolvedTimeRange": {
+    "field": "timestamp",
+    "from": "2026-10-17T08:00:00Z",
+    "to": "2026-10-18T08:00:00Z",
+    "timeZone": "Asia/Shanghai"
+  },
+  "rows": {
+    "schema": [{"name": "timestamp", "type": "timestamp"}, {"name": "level", "type": "string"}, {"name": "message", "type": "string"}],
+    "datarows": [["2026-10-17T08:10:00Z", "ERROR", "example"]]
+  },
+  "page": {"number": 1, "size": 50, "hasNext": false},
+  "histogram": {
+    "status": "ok",
+    "interval": "1h",
+    "timeZone": "Asia/Shanghai",
+    "buckets": [{"from": "2026-10-17T08:00:00Z", "to": "2026-10-17T09:00:00Z", "count": 1}]
+  },
+  "warnings": []
 }
 ```
 
-`schema` 的名称使用查询别名，`datarows` 各列与 schema 顺序一致；保留 JSON 的 null、对象、数组和数值，时间戳使用引擎输出字符串。若引擎返回非致命提示，响应包含 `warnings`；空结果仍返回 schema，数据行为 `[]`。响应携带执行错误时返回失败，不把部分数据当作成功结果。
+上例仅展示一个桶；实际成功分布补齐整个范围的空桶。`schema` 使用查询别名，`datarows` 按列顺序保留 null、对象、数组和数值；空结果仍带 schema。未请求的结果部分不返回。响应不提供总命中数，不用当前页行数代替总数。
 
-`total` 和 `size` 均表示本次返回的数据行数，**不是源表所有匹配记录数**。普通查询沿用 `plugins.query.size_limit`（默认 10,000），显式 `LIMIT` / `head` 仍生效；大结果使用下方异步导出任务接口。
-
-ClickHouse 的 PPL 示例：
-
-```bash
-curl --fail --request POST 'http://localhost:8080/query' \
-  --header 'Content-Type: application/json' \
-  --data-raw '{"source":"analytics","language":"PPL","query":"source=your_table | fields id,timestamp,message | head 10"}'
-```
-
-非法请求、未知数据源及查询语法/语义错误返回 `400`，执行故障返回 `500`；引擎明确报告权限不足或资源限额时分别返回 `403` / `429`。成功响应为 `application/json`，没有 CSV 附件头。
-
-## Web 查询导出
-
-通过 `POST /query/export` 提交 `Content-Type: application/json` 请求：
-
-| 请求字段 | 说明 |
+| 参数 | 规则 |
 | --- | --- |
-| `source` | 数据源名称，省略时使用配置的默认数据源（本例为 `logs`）；可选名称包括 `logs`、`analytics`。 |
-| `language` | `SQL` 或 `PPL`，大小写不敏感；省略时为 `SQL`。 |
-| `query` | 必填，查询文本不能为空或仅包含空白。 |
+| `timeRange` | 可选；未传表示不增加外部时间限制。采用 `[from,to)`，相对端点从同一个当前时间解析。时间输入支持毫秒，亚毫秒绝对值返回 400；系统生成的 `now` 统一到毫秒。 |
+| `filters` | 默认空数组；`field/operator/value` 按 AND 组合，绑定源数据字段。 |
+| `page` | 明细默认第一页、每页 50 条（受配置上限限制）；正整数页码，受每页和最大偏移限制。 |
+| `histogram.interval` | `auto`、`1m/minute`、`1h/hour`、`1d/day`。 |
+| `include` | 默认 `["rows"]`；可选 `["histogram"]` 或 `["rows","histogram"]`。 |
 
-以下 SQL 示例省略 `source` 和 `language`，使用默认的 `logs` 和 SQL。将 `your_index` 替换为实际索引或别名：
+相对时间支持 `now`、`now-15m`、`now-1h`、`now-1d`、`now-1w`、`now-1M` 以及按分钟/小时/自然日取整的 `/m`、`/h`、`/d`。绝对时间支持 ISO 时间或按业务时区解释的本地日期/日期时间。前端绝对时间输入要求显式时区。客户端必须将 `resolvedTimeRange` 原样用于翻页、图表刷新和导出；重新搜索才重新解析 `now`。
+
+支持的筛选操作为 `eq/ne/gt/gte/lt/lte/in/is_null/is_not_null/contains`；`in` 使用数组，空值条件不需要 value，其他操作需提供非 null 值。`contains` 是字面字符串包含，用户输入的 `%` / `_` 不解释为 SQL 通配符。
+
+外部条件在源数据读取之后、用户原有过滤/计算/聚合之前执行；保留原语句 OR 分组、HAVING 和 PPL stats 后 where 的位置。条件冲突返回空结果。不存在的字段、错误类型、无法明确绑定条件的连接/多分支查询直接报错，不猜测筛选目标。时间字段无需出现在最终投影中。
+
+分页在完整用户结果外执行，多取一行判断 `hasNext`，保留手写 `LIMIT/head` 的边界与原有排序。没有稳定排序时返回 `UNSTABLE_ORDER` 提示；持续写入下的有界页码不保证跨请求快照一致性。底层 PIT/JDBC 分页不是 HTTP 跨请求游标。
+
+普通单表明细的时间图在分页前独立后台聚合，使用相同固定时间和筛选。自动粒度：一小时内用分钟，一天内用小时，更长范围用自然日。桶边界按业务时区对齐，首尾桶仅统计范围内的数据，返回完整自然桶的 `from/to`。全部时间、聚合/去重/连接/窗口等不支持形状返回 `histogram.status="unsupported"` 及 reason。图表执行失败或桶数过多返回 `status="error"` 及明确原因，明细仍可成功；桶数过多时缩小范围或调整粒度。非法 interval 属于请求错误。独立图表刷新可使用 `include:["histogram"]`。
+
+ClickHouse PPL 明细示例：
+
+```bash
+curl --fail --request POST 'http://localhost:8080/search' \
+  --header 'Content-Type: application/json' \
+  --data-raw '{"source":"analytics","language":"PPL","query":"source=your_table | fields id,timestamp,message | head 10","page":{"number":1,"size":5}}'
+```
+
+非法请求、未知数据源及语法/语义错误返回 `400`；明确权限不足和资源限额分别返回 `403/429`；执行故障返回 `500`。明细执行故障不会返回假成功或全零图表。
+
+## 同步与异步 CSV 导出
+
+导出只接受 `source、language、query、timeRange、filters`，拒绝 UI 的 `page/histogram/include`。将当前成功搜索的绝对时间与完整筛选复制到请求中；相对时间若直接提交导出，也会在任务提交时解析并冻结。以下示例使用固定范围：
 
 ```bash
 curl --fail --output result.csv \
-  --request POST 'http://localhost:8080/query/export' \
+  --request POST 'http://localhost:8080/search/export' \
   --header 'Content-Type: application/json' \
-  --data-raw '{"query":"SELECT count(*) AS total FROM `your_index`"}'
+  --data-raw '{"source":"logs","language":"SQL","query":"SELECT timestamp,level,message FROM `your_index`","timeRange":{"field":"timestamp","from":"2026-10-17T08:00:00Z","to":"2026-10-18T08:00:00Z","timeZone":"Asia/Shanghai"},"filters":[{"field":"level","operator":"eq","value":"ERROR"}]}'
 ```
 
-PPL 示例选择 `analytics` 数据源，将 `your_table` 替换为 ClickHouse 当前数据库中的表：
+同步导出通过共享 runner 逐行写入受限临时文件，完成后输出 `text/csv;charset=UTF-8`，带 `Content-Disposition: attachment; filename="result.csv"`；不将全量结果收集进内存。默认使用 `CsvResponseFormatter` 的 `sanitize=true`，不添加 BOM。下载关闭后清理同步任务与临时文件。
+
+异步提交相同条件，仅将路径改为 `/search/export/tasks`：
 
 ```bash
-curl --fail --output result.csv \
-  --request POST 'http://localhost:8080/query/export' \
+curl --fail --request POST 'http://localhost:8080/search/export/tasks' \
   --header 'Content-Type: application/json' \
-  --data-raw '{"source":"analytics","language":"ppl","query":"source=your_table | stats count() as total"}'
-```
+  --data-raw '{"source":"analytics","language":"PPL","query":"source=your_table | fields timestamp,message","timeRange":{"field":"timestamp","from":"2026-10-17T08:00:00Z","to":"2026-10-18T08:00:00Z","timeZone":"Asia/Shanghai"},"filters":[]}'
+# HTTP 202，响应 {"id":"..."}，Location 为带应用上下文的任务状态 URL
 
-成功响应为 `Content-Type: text/csv;charset=UTF-8`，并带有 `Content-Disposition: attachment; filename="result.csv"`。导出沿用现有 `CsvResponseFormatter` 的默认 `sanitize=true` 行为，不添加 BOM。
-
-仅导出本次查询实际返回的行；嵌入式配置默认 `plugins.query.size_limit=10000`。查询结果在内存中收集，不承诺全量、异步或流式导出。
-
-缺失或空白 `query`、非法 `language` 或 `source`，以及引擎报告的非法查询参数返回 HTTP `400`；其他查询执行失败返回 HTTP `500`。错误响应不会作为 CSV 附件返回。示例中的 `curl --fail` 遇到 HTTP 错误时以非零状态退出，不将错误体保存为 CSV。更改服务端口后，请同步调整请求 URL。
-
-## 大数据异步导出
-
-ES 和 ClickHouse 的 SQL/PPL 查询均可使用任务接口。请求字段与同步导出一致：
-
-```bash
-curl --fail --request POST 'http://localhost:8080/query/export/tasks' \
-  --header 'Content-Type: application/json' \
-  --data-raw '{"source":"logs","language":"SQL","query":"SELECT * FROM `your_index`"}'
-# HTTP 202，响应 {"id":"..."}，Location 为任务状态 URL
-
-curl --fail 'http://localhost:8080/query/export/tasks/<id>'
+curl --fail 'http://localhost:8080/search/export/tasks/<id>'
 # {"id":"...","state":"RUNNING","exportedRows":1000,"fileSizeBytes":65536,
 #  "submittedAtMillis":...,"completedAtMillis":null,"error":null}
 
-# state 为 SUCCEEDED 后下载：
-curl --fail --output result.csv 'http://localhost:8080/query/export/tasks/<id>/file'
+curl --fail --output result.csv 'http://localhost:8080/search/export/tasks/<id>/file'
+# 仅 state=SUCCEEDED 时下载
 ```
 
-ClickHouse 示例：
+- 状态为 `PENDING/RUNNING/SUCCEEDED/FAILED/CANCELLED`；排队中的任务也可能显示 RUNNING。提交成功始终返回 202 和 ID，即使随后立即失败。
+- 每 1,000 行或写入期间约 250ms 刷新进度，完成时更新精确值。空结果仍有 CSV 表头；失败删除部分文件，文件大小归零，error 给出原因。
+- 文件未成功返回 `409`；未知/过期任务 `404`；格式错误 `400`；其他用户任务 `403`；容量已满 `429`。
+- 同步/异步使用同一组类型化约束、逐行转换和写盘；ES 使用 PIT + search_after（分组使用 composite 分页），CH 使用 JDBC 迭代。导出不受交互查询 `plugins.query.size_limit` 输出上限约束，保留 SQL LIMIT / PPL head。
+- 本地排序、连接、聚合仍可能使用较多内存。`timewrap` 需要完整结果透视，当前流式导出明确失败；流式读取不代表任意算子都有固定内存上界。
 
-```json
-{"source":"analytics","language":"PPL","query":"source=your_table | fields timestamp,message"}
-```
-
-- 状态沿用 `QueryJobService`：`PENDING`、`RUNNING`、`SUCCEEDED`、`FAILED`、`CANCELLED`；排队中的导出也可能显示 `RUNNING`。即使查询立即完成或失败，提交仍返回 `202` 和可查询的 ID。
-- `exportedRows`、`fileSizeBytes` 表示最近一次刷盘的进度；每 1,000 行或写入期间约 250ms 更新一次，完成时更新精确值。空结果也生成 CSV 表头。失败时删除部分文件，文件大小归零，`error` 给出失败原因。
-- 只有成功文件可以下载；运行中、失败或取消返回 `409`。未知/过期任务返回 `404`，格式错误的 ID/请求返回 `400`，其他用户的任务返回 `403`，队列或保留任务容量满返回 `429`。
-- 逐行转换和写盘，不创建全量结果集合；ES 使用 PIT + `search_after`（分组聚合使用 composite 分页），CH 使用 JDBC 结果迭代。忽略交互查询的 `plugins.query.size_limit` 输出上限，保留 SQL `LIMIT` / PPL `head` 等查询语义。
-- 查询中的本地排序、连接、聚合等算子仍可能占用较多内存。`timewrap` 依赖全量结果透视，流式导出会明确失败；它仍可使用同步接口。
-
-配置示例（以下均为默认值，目录默认在 JVM 临时目录下）：
+容量与清理默认配置：
 
 ```yaml
 unified-query:
@@ -195,38 +230,34 @@ unified-query:
     workers: 2
     queue-capacity: 16
     max-tasks: 100
-    max-file-bytes: 10737418240 # 单文件 10 GiB，超限失败，不截断成成功文件
+    max-file-bytes: 10737418240 # 10 GiB，超限失败，不截断成成功文件
 ```
 
-TTL 从任务进入终态开始计算。文件在任务过期后最多约 1 秒清理，已经开始的下载仍可完成；应用正常关闭时取消任务并删除文件。任务元数据保存在本机内存，文件保存在本机磁盘，不提供重启恢复或跨实例查询，部署多实例时需保持请求路由到原实例。进程异常退出可能留下旧 `session-*` 目录，需要按部署策略清理。
+目录默认位于 JVM 临时目录。TTL 从终态开始，过期后约一秒清理，已打开下载可完成。正常关闭取消任务并清理文件；异常退出可能遗留 `session-*` 目录。元数据在本机内存、文件在本机磁盘，没有重启恢复或跨实例任务查询，多实例部署应路由至原实例。
 
-接口使用 HTTP 请求的 `Principal` 绑定任务归属；此示例未配置认证时，所有请求均为匿名身份。业务应用应在现有认证链中提供 `Principal`。
-
-Starter 会自动配置 `LocalQueryJobService`，应用可以提供自己的 `QueryJobService` bean 覆盖它。普通程序也可直接使用 `LocalQueryJobService` 与 `QueryRunner`；长期保留的任务使用 `submitAsync`，原来的 `submit` 保持同步等待/超时返回 ID 的行为。`UnifiedQueryService.stream` 提供同步逐行回调，资源在返回或异常时释放。
+HTTP Principal 绑定异步任务归属；本例没有认证时共享匿名身份。Starter 自动提供 `LocalQueryJobService`，业务可提供自己的 `QueryJobService` bean。长期保留的任务用 `submitAsync`，原 submit 仍保留同步等待/超时返回 ID 的语义。
 
 ## 在业务代码中调用
 
-业务代码可以直接注入 `UnifiedQueryService`：
+注入 `UnifiedQueryService`，用同一个不可变执行模型调用 `execute/explain/stream`。库入口只接受已解析的绝对时间；相对时间和 UI include 策略属于宿主服务：
 
 ```java
-public class ReportService {
-  private final UnifiedQueryService queries;
+var request = new QueryExecutionRequest(
+    "logs", QueryType.SQL, "SELECT message FROM application_logs ORDER BY timestamp",
+    new QueryExecutionRequest.TimeRange(
+        "timestamp", Instant.parse("2026-10-17T08:00:00Z"),
+        Instant.parse("2026-10-18T08:00:00Z"), ZoneId.of("Asia/Shanghai")),
+    List.of(new QueryExecutionRequest.FieldFilter("level", "eq", "ERROR")),
+    null, null);
 
-  public ReportService(UnifiedQueryService queries) {
-    this.queries = queries;
-  }
-
-  public ExecutionEngine.QueryResponse elasticsearchCount(String sql) {
-    return queries.execute("logs", QueryType.SQL, sql);
-  }
-
-  public ExecutionEngine.QueryResponse clickHouseReport(String ppl) {
-    return queries.execute("analytics", QueryType.PPL, ppl);
-  }
-}
+var rows = queries.execute(request.withWindow(new QueryExecutionRequest.ResultWindow(0, 51)));
+var plan = queries.explain(request);
+queries.stream(request, consumer, cancellation);
+var histogram = queries.execute(request.withHistogram(
+    new QueryExecutionRequest.Histogram("timestamp", "1h", ZoneId.of("Asia/Shanghai"))));
 ```
 
-每次调用选择一个数据源。更多后端配置和执行说明见 [embedded-query-backends.md](../docs/dev/embedded-query-backends.md)。
+宿主裁掉第 51 条哨兵行并计算 hasNext。`consumer` / `cancellation` 分别为 `QueryRowConsumer` / `QueryCancellation`；资源在返回、取消或异常时释放。引擎响应类型仍为 `ExecutionEngine.QueryResponse`。每次请求选一个数据源；共享计划入口 `UnifiedQueryPlanner.plan(QueryExecutionRequest)` 将外部条件绑定在唯一源表 scan 之后。更多后端行为见 [embedded-query-backends.md](../docs/dev/embedded-query-backends.md)。
 
 ## 真实数据源 JUnit 测试
 

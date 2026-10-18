@@ -42,6 +42,13 @@ th{font-size:11px;color:#8794a7}.timestamp{font-size:10px;color:#77869d}.service
 .history-trigger:hover,.history-trigger[aria-expanded=true]{background:#eef4fc;color:#3678c4}
 .query-editor-row{display:flex;align-items:center;gap:14px;padding:8px 12px;min-height:52px}
 .query-input-wrap{display:flex;align-items:flex-start;gap:12px;flex:1;min-width:0;padding:0}
+.query-input-wrap{position:relative}
+.ppl-completions{position:absolute;top:calc(100% + 7px);left:25px;z-index:45;width:min(440px,100%);min-width:min(260px,calc(100vw - 64px));max-width:calc(100vw - 64px);max-height:min(224px,35dvh);overflow-y:auto;overscroll-behavior:contain;padding:4px;background:#fff;border:1px solid #dce4ef;border-radius:8px;box-shadow:0 8px 26px #273e6126}
+.ppl-completions button{display:flex;align-items:center;justify-content:space-between;gap:16px;width:100%;padding:7px 9px;border-radius:5px;text-align:left;font:12px/18px var(--mono)}
+.ppl-completions button>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ppl-completions button small{flex:none;font:10px/18px -apple-system,BlinkMacSystemFont,sans-serif;color:#8290a3}
+.ppl-completions button:hover,.ppl-completions button[aria-selected=true]{background:#edf5ff;color:#006bd6}
+.ppl-assist-status{margin:0;padding:0 14px 6px 37px;font-size:10px;line-height:16px;color:#7789a0}
 .editor-line-number{color:#b1bac7;font:10px/20px var(--mono);min-width:13px;text-align:center;padding-top:1px}
 #query-input{flex:1;min-width:0;width:100%;border:0;resize:vertical;background:transparent;color:#4f6688;font:12px/20px var(--mono);padding:0;min-height:40px;max-height:180px;height:40px;tab-size:2}
 #query-input::placeholder{color:#a2adbd}
@@ -176,3 +183,12 @@ th{font-size:11px;color:#8794a7}.timestamp{font-size:10px;color:#77869d}.service
 button:disabled{opacity:.45;cursor:not-allowed}.query-complete{max-width:340px}#elapsed{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#cancel-query{font-size:10px;min-width:0;padding:0 8px;height:30px}
 @media(max-width:980px){.query-controls{gap:9px}.table-control input{width:130px}.local-time select{max-width:105px}.query-complete{max-width:220px}.chart-axis span:nth-child(even){display:none}}
 @media(max-width:720px){.query-controls{width:100%}.table-control{flex:1;justify-content:flex-end}.table-control input{max-width:45vw;width:180px}.filter-row{flex-wrap:wrap;max-height:105px;gap:5px}.local-time{width:100%;justify-content:flex-end}.local-time select{max-width:45%}.result-tools{gap:6px}#export-status-button{font-size:9px}.query-complete{max-width:155px}.chart-head{gap:6px}.chart-head span:last-child{max-width:70%;text-align:right}.detail-drawer{width:min(440px,100vw)}.table-scroll td{max-width:280px}.cell-value{max-width:260px}}
+
+/* Structured search controls share the editor's compact visual rhythm. */
+.search-time-controls{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid #f0f2f5;color:#8190a4;font-size:10px}
+.search-time-controls label{display:inline-flex;align-items:center;gap:6px;min-width:0}
+.search-time-controls input,.search-time-controls select{min-width:0;width:135px;max-width:100%;border:1px solid #e6ebf1;border-radius:5px;background:#f9fbfd;color:#61748c;padding:4px 6px;font:11px var(--mono)}
+.search-time-controls select{font-family:inherit;width:120px}.search-time-controls #time-zone{width:135px}
+#absolute-time-controls{display:flex;gap:12px;flex-wrap:wrap;width:100%}#absolute-time-controls[hidden]{display:none}#absolute-time-controls label{flex:1}#absolute-time-controls input{flex:1;width:230px}
+.overview-top>.query-complete{display:flex;align-items:center;gap:6px;max-width:none;font-size:11px}.overview-top>[data-action="chart"]{margin-left:auto}.chart-error{color:#b4544f}.chart-bar{min-width:2px}.chart-bar i{min-height:0}.result-field{cursor:default;color:#8190a3}.field-group-label{margin-top:14px}.result-field .field-type{background:#f0f2f6;color:#92a0b2}
+@media(max-width:720px){.search-time-controls{gap:8px;padding:8px 10px}.search-time-controls>label{flex:1 1 120px;justify-content:space-between}.search-time-controls input,.search-time-controls select{width:110px}.overview-top>.query-complete{font-size:10px}#absolute-time-controls label{flex:1 1 100%}.filter-row{max-height:95px}.query-controls{grid-row:auto;grid-column:auto}.query-toolbar{grid-template-columns:auto 1fr auto}.query-toolbar .select-control{max-width:100%}}

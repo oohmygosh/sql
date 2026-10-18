@@ -35,6 +35,7 @@ final class QueryClickHouseDialect extends ClickHouseSqlDialect {
 
   @Override
   public boolean supportsFunction(SqlOperator operator, RelDataType type, List<RelDataType> args) {
+    if (operator.getName().equals("SEARCH_TIME_BUCKET")) return true;
     if (Set.of(
             "CAST",
             "SAFE_CAST",
@@ -84,6 +85,37 @@ final class QueryClickHouseDialect extends ClickHouseSqlDialect {
 
   @Override
   public void unparseCall(SqlWriter writer, SqlCall call, int left, int right) {
+    if (call.getOperator().getName().equals("SEARCH_TIME_BUCKET")) {
+      String interval =
+          ((org.apache.calcite.sql.SqlLiteral) call.operand(1)).getValueAs(String.class);
+      String zone = ((org.apache.calcite.sql.SqlLiteral) call.operand(2)).getValueAs(String.class);
+      java.time.ZoneId normalized = java.time.ZoneId.of(zone).normalized();
+      String unit =
+          switch (interval) {
+            case "1m" -> "MINUTE";
+            case "1h" -> "HOUR";
+            case "1d" -> "DAY";
+            default ->
+                throw new IllegalArgumentException("Unsupported search interval: " + interval);
+          };
+      // ClickHouse accepts IANA names but not Java's "Z" or numeric offset zone identifiers.
+      // A fixed offset can be applied before UTC rounding and removed afterwards.
+      if (normalized instanceof java.time.ZoneOffset offset) {
+        int seconds = offset.getTotalSeconds();
+        writer.print("toTimeZone(addSeconds(toStartOfInterval(addSeconds(");
+        call.operand(0).unparse(writer, 0, 0);
+        writer.print(
+            ", " + seconds + "), INTERVAL 1 " + unit + ", 'UTC'), " + -seconds + "), 'UTC')");
+        return;
+      }
+      // JDBC exposes calendar fields; return UTC wall-clock values for Calcite's UTC timestamps.
+      writer.print("toTimeZone(toStartOfInterval(");
+      call.operand(0).unparse(writer, 0, 0);
+      writer.print(", INTERVAL 1 " + unit + ", ");
+      call.operand(2).unparse(writer, 0, 0);
+      writer.print("), 'UTC')");
+      return;
+    }
     String function =
         switch (call.getKind()) {
           case SUM -> "sumOrNull";

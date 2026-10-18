@@ -19,12 +19,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import org.opensearch.sql.api.QueryExecutionRequest;
 import org.opensearch.sql.api.UnifiedQueryService;
 import org.opensearch.sql.data.model.ExprValue;
 import org.opensearch.sql.executor.ExecutionEngine.Schema;
 import org.opensearch.sql.executor.QueryCancellation;
 import org.opensearch.sql.executor.QueryRowConsumer;
-import org.opensearch.sql.executor.QueryType;
 import org.opensearch.sql.job.QueryResult;
 import org.opensearch.sql.job.QueryRunner;
 import org.opensearch.sql.protocol.response.format.CsvResponseFormatter;
@@ -32,9 +32,7 @@ import org.opensearch.sql.protocol.response.format.CsvResponseFormatter;
 /** A single export, with bounded row buffering and file ownership independent of job metadata. */
 final class QueryExportRunner implements QueryRunner {
   private final UnifiedQueryService queries;
-  private final String source;
-  private final QueryType language;
-  private final String query;
+  private final QueryExecutionRequest request;
   private final ExecutorService executor;
   private final Path directory;
   private final long maxFileBytes;
@@ -49,16 +47,12 @@ final class QueryExportRunner implements QueryRunner {
 
   QueryExportRunner(
       UnifiedQueryService queries,
-      String source,
-      QueryType language,
-      String query,
+      QueryExecutionRequest request,
       ExecutorService executor,
       Path directory,
       long maxFileBytes) {
     this.queries = queries;
-    this.source = source;
-    this.language = language;
-    this.query = query;
+    this.request = request;
     this.executor = executor;
     this.directory = directory;
     this.maxFileBytes = maxFileBytes;
@@ -127,7 +121,7 @@ final class QueryExportRunner implements QueryRunner {
                 lastFlush = System.nanoTime();
               }
             };
-        queries.stream(source, language, query, sink, cancellation);
+        queries.stream(request, sink, cancellation);
         sink.flush();
       }
       cancellation.check();
@@ -153,6 +147,15 @@ final class QueryExportRunner implements QueryRunner {
 
   Progress progress() {
     return progress;
+  }
+
+  void awaitCompletion() {
+    try {
+      completion.join();
+    } catch (java.util.concurrent.CompletionException e) {
+      if (e.getCause() instanceof RuntimeException cause) throw cause;
+      throw new IllegalStateException("Query export failed", e.getCause());
+    }
   }
 
   synchronized boolean rejected() {
