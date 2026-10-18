@@ -147,7 +147,30 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
     };
   }
 
+  @Override
+  public Set<String> tableNames(Schema schema) {
+    // The generic schema map loads a mapping per table. Alias metadata supplies both concrete
+    // indices and queryable aliases in one request, without reading any document or field mapping.
+    Set<String> names = new LinkedHashSet<>();
+    request("GET", "/_alias", null)
+        .forEach(
+            (index, metadata) -> {
+              names.add(index);
+              names.addAll(object(object(metadata).get("aliases")).keySet());
+            });
+    return Set.copyOf(names);
+  }
+
   private Table table(String index) {
+    return table(index, false);
+  }
+
+  @Override
+  public Table metadataTable(Schema schema, String name) {
+    return table(name, true);
+  }
+
+  private Table table(String index, boolean requireMatches) {
     Map<String, Object> mappings;
     try {
       mappings = request("GET", "/" + path(index) + "/_mapping", null);
@@ -156,6 +179,7 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
           && response.getResponse().getStatusLine().getStatusCode() == 404) return null;
       throw e;
     }
+    if (requireMatches && mappings.isEmpty()) return null;
     Map<String, Field> fields = mappingFields(mappings);
     fieldTypes.forEach(
         (fieldName, type) -> {

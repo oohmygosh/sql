@@ -6,10 +6,12 @@
 package org.opensearch.sql.backend;
 
 import java.util.List;
+import java.util.Set;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.schema.Schema;
 import org.apache.calcite.schema.SchemaPlus;
+import org.apache.calcite.schema.Table;
 import org.opensearch.sql.executor.ExecutionEngine;
 
 /** A data source's schema, planning rules and executor must be selected together. */
@@ -19,6 +21,16 @@ public interface QueryBackend extends AutoCloseable {
   String type();
 
   Schema createSchema(SchemaPlus parent);
+
+  /** Enumerates relation names without loading each relation's columns when the backend permits. */
+  default Set<String> tableNames(Schema schema) {
+    return schema.getTableNames();
+  }
+
+  /** Resolves completion metadata without changing the backend's query-time table semantics. */
+  default Table metadataTable(Schema schema, String name) {
+    return schema.getTable(name);
+  }
 
   default String defaultSchema() {
     return "";

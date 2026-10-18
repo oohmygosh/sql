@@ -1019,8 +1019,8 @@ public class AstBuilder extends OpenSearchPPLParserBaseVisitor<UnresolvedPlan> {
       }
     }
     Foreach.Mode mode =
-        options.containsKey("mode")
-            ? Foreach.Mode.of(options.get("mode"))
+        options.containsKey(Foreach.Option.MODE.toString())
+            ? Foreach.Mode.of(options.get(Foreach.Option.MODE.toString()))
             : inferForeachMode(targets);
     UnresolvedExpression collectionExpression = null;
     if (mode != Foreach.Mode.MULTIFIELD) {
@@ -1451,6 +1451,11 @@ public class AstBuilder extends OpenSearchPPLParserBaseVisitor<UnresolvedPlan> {
       Set.of(
           "auto", "num", "rmcomma", "rmunit", "memk", "none", "ctime", "mktime", "dur2sec",
           "mstime");
+
+  /** Returns the immutable conversion vocabulary used by execution and language tooling. */
+  public static Set<String> supportedConversionFunctions() {
+    return SUPPORTED_CONVERSION_FUNCTIONS;
+  }
 
   private Let buildConversion(OpenSearchPPLParser.ConvertFunctionContext funcCtx) {
     if (funcCtx.fieldExpression().isEmpty()) {

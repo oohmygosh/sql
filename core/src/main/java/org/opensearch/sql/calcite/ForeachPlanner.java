@@ -40,6 +40,7 @@ import org.opensearch.sql.ast.expression.QualifiedName;
 import org.opensearch.sql.ast.expression.UnresolvedExpression;
 import org.opensearch.sql.ast.tree.Foreach;
 import org.opensearch.sql.ast.tree.Foreach.ForeachEvalClause;
+import org.opensearch.sql.ast.tree.Foreach.Option;
 import org.opensearch.sql.calcite.CalcitePlanContext.ForeachBinding;
 import org.opensearch.sql.calcite.CalcitePlanContext.ForeachBindingType;
 import org.opensearch.sql.calcite.utils.WildcardUtils;
@@ -62,11 +63,6 @@ import org.opensearch.sql.expression.function.PPLFuncImpTable;
  */
 class ForeachPlanner {
 
-  private static final String OPTION_FIELDSTR = "fieldstr";
-  private static final String OPTION_MATCHSTR = "matchstr";
-  private static final String OPTION_MATCHSEG = "matchseg";
-  private static final String OPTION_ITEMSTR = "itemstr";
-  private static final String OPTION_ITERSTR = "iterstr";
   private static final String PLACEHOLDER_FIELD = "FIELD";
   private static final String PLACEHOLDER_MATCHSTR = "MATCHSTR";
   private static final String PLACEHOLDER_MATCHSEG = "MATCHSEG";
@@ -130,7 +126,7 @@ class ForeachPlanner {
         identifiers,
         new ForeachBinding(fieldName, ForeachBindingType.FIELD),
         PLACEHOLDER_FIELD,
-        OPTION_FIELDSTR,
+        Option.FIELDSTR.toString(),
         options);
     List<String> orderedPatterns =
         Stream.concat(
@@ -149,7 +145,7 @@ class ForeachPlanner {
           identifiers,
           new ForeachBinding(String.join("", segments), ForeachBindingType.LITERAL),
           PLACEHOLDER_MATCHSTR,
-          OPTION_MATCHSTR,
+          Option.MATCHSTR.toString(),
           options);
       for (int i = 0; i < segments.size(); i++) {
         String defaultName = PLACEHOLDER_MATCHSEG + (i + 1);
@@ -158,7 +154,7 @@ class ForeachPlanner {
             identifiers,
             new ForeachBinding(segments.get(i), ForeachBindingType.LITERAL),
             defaultName,
-            OPTION_MATCHSEG + (i + 1),
+            Option.MATCHSEG.toString() + (i + 1),
             options);
       }
       break;
@@ -355,9 +351,21 @@ class ForeachPlanner {
     Map<String, ForeachBinding> bindings = new LinkedHashMap<>();
     Map<String, ForeachBinding> identifiers = new LinkedHashMap<>();
     bindPairPlaceholder(
-        bindings, identifiers, 0, itemType, PLACEHOLDER_ITEM, OPTION_ITEMSTR, node.getOptions());
+        bindings,
+        identifiers,
+        0,
+        itemType,
+        PLACEHOLDER_ITEM,
+        Option.ITEMSTR.toString(),
+        node.getOptions());
     bindPairPlaceholder(
-        bindings, identifiers, 1, iterType, PLACEHOLDER_ITER, OPTION_ITERSTR, node.getOptions());
+        bindings,
+        identifiers,
+        1,
+        iterType,
+        PLACEHOLDER_ITER,
+        Option.ITERSTR.toString(),
+        node.getOptions());
     for (int i = 0; i < capturedFields.size(); i++) {
       RelDataTypeField field = capturedFields.get(i);
       bindIdentifier(identifiers, field.getName(), PAIR_VAR, i + 2, field.getType());
@@ -468,8 +476,8 @@ class ForeachPlanner {
   }
 
   private boolean itemRequiresNumericType(Foreach node, CalcitePlanContext context) {
-    String itemName = node.getOptions().getOrDefault(OPTION_ITEMSTR, PLACEHOLDER_ITEM);
-    boolean customIdentifier = node.getOptions().containsKey(OPTION_ITEMSTR);
+    String itemName = node.getOptions().getOrDefault(Option.ITEMSTR.toString(), PLACEHOLDER_ITEM);
+    boolean customIdentifier = node.getOptions().containsKey(Option.ITEMSTR.toString());
     return node.getEvalClauses().stream()
         .anyMatch(
             clause ->
@@ -562,11 +570,11 @@ class ForeachPlanner {
         Stream.concat(Stream.of(PAIR_VAR), targetAliases.stream())
             .map(name -> name.toUpperCase(Locale.ROOT))
             .collect(Collectors.toSet());
-    if (options.containsKey(OPTION_ITEMSTR)) {
-      excluded.add(options.get(OPTION_ITEMSTR).toUpperCase(Locale.ROOT));
+    if (options.containsKey(Option.ITEMSTR.toString())) {
+      excluded.add(options.get(Option.ITEMSTR.toString()).toUpperCase(Locale.ROOT));
     }
-    if (options.containsKey(OPTION_ITERSTR)) {
-      excluded.add(options.get(OPTION_ITERSTR).toUpperCase(Locale.ROOT));
+    if (options.containsKey(Option.ITERSTR.toString())) {
+      excluded.add(options.get(Option.ITERSTR.toString()).toUpperCase(Locale.ROOT));
     }
     Map<String, RelDataTypeField> rowFields =
         context.relBuilder.peek().getRowType().getFieldList().stream()

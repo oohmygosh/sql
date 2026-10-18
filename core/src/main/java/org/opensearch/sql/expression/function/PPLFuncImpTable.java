@@ -493,6 +493,33 @@ public class PPLFuncImpTable {
             });
   }
 
+  /** Whether every declared signature requires this exact SQL type at an argument position. */
+  public boolean requiresArgumentType(String functionName, int argumentIndex, SqlTypeName type) {
+    Optional<BuiltinFunctionName> builtin = BuiltinFunctionName.of(functionName);
+    if (builtin.isEmpty()) return false;
+    List<Pair<CalciteFuncSignature, FunctionImp>> implementations =
+        externalFunctionRegistry.getOrDefault(
+            builtin.get(), functionRegistry.getOrDefault(builtin.get(), List.of()));
+    if (implementations.isEmpty()) return false;
+    for (var implementation : implementations) {
+      var checker = implementation.getKey().typeChecker();
+      if (checker == null) return false;
+      try {
+        var signatures = checker.getParameterTypes();
+        if (signatures.isEmpty()
+            || signatures.stream()
+                .anyMatch(
+                    parameters ->
+                        argumentIndex >= parameters.size()
+                            || parameters.get(argumentIndex).getSqlTypeName() != type))
+          return false;
+      } catch (UnsupportedOperationException unavailable) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /**
    * Register an operator from external services dynamically.
    *

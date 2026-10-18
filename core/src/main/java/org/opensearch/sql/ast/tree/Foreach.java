@@ -45,6 +45,21 @@ public class Foreach extends UnresolvedPlan {
     return nodeVisitor.visitForeach(this, context);
   }
 
+  /** Runtime option names shared with language tooling. MATCHSEG is a numbered option prefix. */
+  public enum Option {
+    MODE,
+    FIELDSTR,
+    MATCHSTR,
+    MATCHSEG,
+    ITEMSTR,
+    ITERSTR;
+
+    @Override
+    public String toString() {
+      return name().toLowerCase(Locale.ROOT);
+    }
+  }
+
   /** Iteration mode of the foreach command. */
   public enum Mode {
     MULTIFIELD,

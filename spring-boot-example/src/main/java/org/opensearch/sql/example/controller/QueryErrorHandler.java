@@ -19,6 +19,7 @@ import org.springframework.web.server.ResponseStatusException;
 @RestControllerAdvice(
     assignableTypes = {
       SearchController.class,
+      QueryCompletionController.class,
       QueryExportController.class,
       QueryExportTaskController.class
     })

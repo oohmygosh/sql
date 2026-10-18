@@ -8,9 +8,11 @@
 
 `GET /ui/config` 仅提供数据源名称、类型、默认表、时间字段/时区及显式配置的源字段，并提供顶层 `maxPageSize`，不暴露连接地址和凭据。默认表为 `logevent-*` / `log_event`，可通过 `ES_TEST_INDEX` / `CLICKHOUSE_TEST_TABLE` 或 `unified-query.ui.default-tables` 覆盖。它们仅用于生成快捷语句；界面没有独立的表名输入框。字段面板区分源字段与结果列/别名，结果别名不能直接生成源字段筛选。
 
-`GET /ui/ppl/grammar` 返回当前引擎的 PPL 语法包，响应沿用 `/_plugins/_ppl/_grammar` 的 JSON 结构，包括 ANTLR 版本、语法 hash、lexer/parser ATN、词表及补全规则。浏览器首次进入 PPL 模式时加载一次并在当前页面缓存，用 `antlr4ng 3.0.16` 与 `antlr4-c3 3.4.3` 在本地解释 ATN，生成命令、函数、表、字段及操作符候选；刷新页面后可加载新语法。表名、源字段和时间字段使用 `/ui/config` 的显式配置，结果列不作为源字段候选。
+`GET /ui/query/completions` 返回已注册的补全语言，当前为 PPL。`POST /ui/query/completions` 接收 `language、source、text、caret、documentVersion、trigger`，返回带说明和 UTF-16 替换范围的候选。公共补全服务通过 `LanguageCompletionProvider` 注册语言，SQL 接入可复用相同协议和元数据服务；当前 SQL 编辑器不启用补全。
 
-前端负责 150ms 防抖、键盘与组合输入处理、来源切换以及按 UTF-16 范围插入候选，补全时不向后端发送语句或光标。后端只提供语法包和配置，不接收补全请求，也不访问 Elasticsearch 或 ClickHouse 来计算候选。完整语句末尾和等待用户填写字面值的位置停止提示；补全不包含实时语法错误诊断。
+PPL 按位置连续引导 `source/search/index → = → 表/索引 → | → 命令 → 字段/条件`。命令、参数、枚举和函数入口由执行语法的 ANTLR ATN 统一发现；表字段、作用域、动态选项和执行能力由独立语义层补充。表和字段读取当前数据源的 Elasticsearch mapping 或 ClickHouse JDBC 元数据，不执行编辑中的语句，不扫描数据，也不使用上次结果列冒充字段。字段跟随语句中的表，并反映前序管道的投影、重命名、新增字段和聚合输出。表名、字段名由语言适配器转义。
+
+前端负责 150ms 防抖、取消请求、版本校验、组合输入和候选插入，接受候选后继续请求下一位置。字段元数据短期缓存并隔离数据源和表；失败会显示状态，不影响查询执行。补全不包含实时语法错误诊断。`GET /ui/ppl/grammar` 保留为兼容的 PPL 语法包接口，编辑器不再依赖浏览器解释该语法包。
 
 后端仅提供 HTTP 接口，IDE 直接运行 `QueryApplication`；Gradle 构建和 JAR 运行均不需要 Node.js，也不构建或打包前端。前端在 `frontend/` 下执行 `npm ci`、`npm run dev`，由 Vite 将 `/search` 和 `/ui` 代理到后端 `http://127.0.0.1:8080`。请求和异步任务链接支持 Spring servlet context path。
 
@@ -22,6 +24,7 @@ org.opensearch.sql.example
 ├── controller                      # HTTP 路由、状态码、JSON/附件响应
 │   ├── SearchController
 │   ├── SearchUiController
+│   ├── QueryCompletionController
 │   ├── QueryExportController
 │   └── QueryExportTaskController
 ├── service
@@ -159,7 +162,9 @@ JUnit 的每个用例有独立名称。HTML 报告位于
 | GET | `/search/export/tasks/{id}` | 查看任务进度 |
 | GET | `/search/export/tasks/{id}/file` | 下载成功文件 |
 | GET | `/ui/config` | 页面初始化显示配置 |
-| GET | `/ui/ppl/grammar` | 浏览器本地 PPL 补全使用的语法包 |
+| GET | `/ui/query/completions` | 当前可用的补全语言 |
+| POST | `/ui/query/completions` | 根据完整文本、光标和数据源生成上下文候选 |
+| GET | `/ui/ppl/grammar` | 兼容的 PPL 语法包接口 |
 
 请求使用 `Content-Type: application/json`。`query` 必填且非空；`source` 省略时使用默认数据源；`language` 大小写不敏感，省略时为 SQL。
 
