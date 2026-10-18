@@ -65,6 +65,20 @@ public interface ExecutionEngine {
             getClass().getSimpleName() + " does not support RelNode execution"));
   }
 
+  /**
+   * Streams all output rows synchronously, ignoring the interactive response-size cap while
+   * preserving limits in the query plan. Backends must opt in; never falls back to collecting rows.
+   */
+  default List<Warning> stream(
+      RelNode plan,
+      CalcitePlanContext context,
+      QueryRowConsumer consumer,
+      QueryCancellation cancellation)
+      throws Exception {
+    throw new UnsupportedOperationException(
+        getClass().getSimpleName() + " does not support streaming execution");
+  }
+
   default void explain(
       RelNode plan,
       ExplainMode mode,

@@ -37,6 +37,15 @@ public interface QueryJobService {
       QueryRunner runner, Principal submitter, Duration waitForCompletion, Duration keepAlive);
 
   /**
+   * Publishes a retained task and returns its ID even if it completes immediately. The runner must
+   * dispatch execution without blocking the submitting thread. Retention starts at termination.
+   */
+  default QueryJobId submitAsync(QueryRunner runner, Principal submitter, Duration keepAlive) {
+    throw new UnsupportedOperationException(
+        "This job service does not support retained submission");
+  }
+
+  /**
    * Returns a snapshot for the given job.
    *
    * @throws QueryJobNotFoundException when the ID does not resolve on this node

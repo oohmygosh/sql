@@ -126,6 +126,50 @@ class ClickHouseAdapterRegressionTest {
     }
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.EnumSource(QueryType.class)
+  void streamsJdbcRowsPastInteractiveCapAndClosesResult(QueryType language) throws Exception {
+    DataSource source = source();
+    Connection connection = source.getConnection();
+    java.sql.Statement statement = mock(java.sql.Statement.class);
+    ResultSet result = mock(ResultSet.class);
+    java.sql.ResultSetMetaData metadata = mock(java.sql.ResultSetMetaData.class);
+    when(connection.createStatement()).thenReturn(statement);
+    when(statement.execute(anyString())).thenReturn(true);
+    when(statement.getResultSet()).thenReturn(result);
+    when(result.getStatement()).thenReturn(statement);
+    when(statement.getConnection()).thenReturn(connection);
+    when(result.getMetaData()).thenReturn(metadata);
+    when(metadata.getColumnCount()).thenReturn(1);
+    when(metadata.getColumnType(1)).thenReturn(Types.DECIMAL);
+    AtomicInteger cursor = new AtomicInteger(-1);
+    when(result.next()).thenAnswer(invocation -> cursor.incrementAndGet() < 12005);
+    when(result.getObject(1)).thenAnswer(invocation -> java.math.BigDecimal.valueOf(cursor.get()));
+    when(result.getBigDecimal(1))
+        .thenAnswer(invocation -> java.math.BigDecimal.valueOf(cursor.get()));
+    var service =
+        new UnifiedQueryService(List.of(new ClickHouseQueryBackend("ch", source, "default")), "ch");
+    AtomicInteger rows = new AtomicInteger();
+    service.stream(
+        null,
+        language,
+        language == QueryType.SQL ? "SELECT id FROM events" : "source=events | fields id",
+        new org.opensearch.sql.executor.QueryRowConsumer() {
+          public void schema(org.opensearch.sql.executor.ExecutionEngine.Schema schema) {}
+
+          public void row(org.opensearch.sql.data.model.ExprValue row) {
+            assertEquals(
+                java.math.BigDecimal.valueOf(rows.getAndIncrement()),
+                row.tupleValue().get("id").value());
+            assertTrue(cursor.get() <= rows.get());
+          }
+        },
+        new org.opensearch.sql.executor.QueryCancellation());
+    assertEquals(12005, rows.get());
+    verify(result).close();
+    verify(statement).close();
+  }
+
   private record Plan(String physical, String sql) {}
 
   private static Plan plan(QueryType language, String query) throws Exception {

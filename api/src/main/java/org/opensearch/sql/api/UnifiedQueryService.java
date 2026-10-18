@@ -7,6 +7,7 @@ package org.opensearch.sql.api;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -18,7 +19,10 @@ import org.opensearch.sql.ast.statement.ExplainMode;
 import org.opensearch.sql.backend.QueryBackend;
 import org.opensearch.sql.common.response.ResponseListener;
 import org.opensearch.sql.executor.ExecutionEngine;
+import org.opensearch.sql.executor.QueryCancellation;
+import org.opensearch.sql.executor.QueryRowConsumer;
 import org.opensearch.sql.executor.QueryType;
+import org.opensearch.sql.executor.Warning;
 
 /** Thin embedded entry point. Each invocation owns its planner, connection and query state. */
 public final class UnifiedQueryService {
@@ -49,6 +53,13 @@ public final class UnifiedQueryService {
     this.settings = Map.copyOf(settings);
   }
 
+  /** Validates routing without querying the backend or planning a statement. */
+  public void validateSource(String source) {
+    String name = source != null ? source : defaultBackend;
+    if (name == null || !backends.containsKey(name))
+      throw new IllegalArgumentException("Unknown or unspecified data source: " + name);
+  }
+
   public ExecutionEngine.QueryResponse execute(String source, QueryType language, String query) {
     return run(source, language, query, false, null);
   }
@@ -69,13 +80,36 @@ public final class UnifiedQueryService {
     return run(source, language, query, false, highlight);
   }
 
-  @SuppressWarnings("unchecked")
+  /** Streams SQL/PPL output with per-query ownership of JDBC, PIT and planner resources. */
+  public List<Warning> stream(
+      String source,
+      QueryType language,
+      String query,
+      QueryRowConsumer consumer,
+      QueryCancellation cancellation) {
+    Objects.requireNonNull(consumer, "consumer");
+    Objects.requireNonNull(cancellation, "cancellation").check();
+    return run(source, language, query, false, null, consumer, cancellation);
+  }
+
   private <T> T run(
       String source,
       QueryType language,
       String query,
       boolean explain,
       org.opensearch.sql.ast.tree.HighlightConfig highlight) {
+    return run(source, language, query, explain, highlight, null, null);
+  }
+
+  @SuppressWarnings("unchecked")
+  private <T> T run(
+      String source,
+      QueryType language,
+      String query,
+      boolean explain,
+      org.opensearch.sql.ast.tree.HighlightConfig highlight,
+      QueryRowConsumer consumer,
+      QueryCancellation cancellation) {
     String name = source != null ? source : defaultBackend;
     QueryBackend backend = name == null ? null : backends.get(name);
     if (backend == null)
@@ -98,6 +132,12 @@ public final class UnifiedQueryService {
         RelNode plan = new UnifiedQueryPlanner(context).plan(query);
         for (var rule : context.getLangSpec().preCompilationRules()) plan = plan.accept(rule);
         plan = backend.normalizePlan(plan);
+        if (consumer != null) {
+          cancellation.check();
+          return (T)
+              backend.executionEngine().stream(
+                  plan, context.getPlanContext(), consumer, cancellation);
+        }
         CompletableFuture<T> result = new CompletableFuture<>();
         ResponseListener<T> listener =
             new ResponseListener<>() {

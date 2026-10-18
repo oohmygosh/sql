@@ -61,6 +61,7 @@ class UnifiedQueryAutoConfigurationTest {
         .run(
             context -> {
               assertThat(context).hasSingleBean(UnifiedQueryService.class);
+              assertThat(context).hasSingleBean(org.opensearch.sql.job.QueryJobService.class);
               assertThat(
                       context
                           .getBean(UnifiedQueryService.class)
@@ -126,6 +127,18 @@ class UnifiedQueryAutoConfigurationTest {
     runner
         .withBean(UnifiedQueryService.class, () -> custom)
         .run(context -> assertThat(context.getBean(UnifiedQueryService.class)).isSameAs(custom));
+  }
+
+  @Test
+  void userJobServiceOverridesLocalHost() {
+    var jobs = org.mockito.Mockito.mock(org.opensearch.sql.job.QueryJobService.class);
+    runner
+        .withBean(QueryBackend.class, () -> backend("custom", new AtomicInteger()))
+        .withBean(org.opensearch.sql.job.QueryJobService.class, () -> jobs)
+        .run(
+            context ->
+                assertThat(context.getBean(org.opensearch.sql.job.QueryJobService.class))
+                    .isSameAs(jobs));
   }
 
   @Test

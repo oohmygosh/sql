@@ -7,6 +7,7 @@ package org.opensearch.sql.executor;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.calcite.plan.RelOptUtil;
 import org.apache.calcite.rel.RelNode;
@@ -39,6 +40,25 @@ public class CalciteExecutionEngine implements ExecutionEngine {
       return;
     }
     listener.onResponse(response);
+  }
+
+  @Override
+  public List<Warning> stream(
+      RelNode plan,
+      CalcitePlanContext context,
+      QueryRowConsumer consumer,
+      QueryCancellation cancellation)
+      throws Exception {
+    cancellation.check();
+    try (PreparedStatement statement = prepare(plan, context)) {
+      cancellation.attach(statement);
+      try (ResultSet result = statement.executeQuery()) {
+        return new CalciteResultSetBuilder(true)
+            .streamResultSet(result, plan.getRowType(), consumer, cancellation);
+      } finally {
+        cancellation.detach();
+      }
+    }
   }
 
   @Override

@@ -110,48 +110,17 @@ public class CalciteResultSetBuilder {
       ResultSet resultSet, RelDataType rowTypes, Integer querySizeLimit) throws SQLException {
     // Get the ResultSet metadata to know about columns
     ResultSetMetaData metaData = resultSet.getMetaData();
-    int columnCount = metaData.getColumnCount();
     List<RelDataType> fieldTypes =
         rowTypes.getFieldList().stream().map(RelDataTypeField::getType).toList();
     List<ExprValue> values = new ArrayList<>();
     var utcCalendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
     // Iterate through the ResultSet
     while (resultSet.next() && (querySizeLimit == null || values.size() < querySizeLimit)) {
-      Map<String, ExprValue> row = new LinkedHashMap<String, ExprValue>();
-      // Loop through each column
-      for (int i = 1; i <= columnCount; i++) {
-        String columnName = metaData.getColumnName(i);
-        Object value =
-            preserveNativeTypes && fieldTypes.get(i - 1).getSqlTypeName() == SqlTypeName.TIMESTAMP
-                ? resultSet.getTimestamp(i, utcCalendar)
-                : resultSet.getObject(i);
-        Object converted = processValue(value, fieldTypes.get(i - 1));
-        ExprValue exprValue = ExprValueUtils.fromObjectValue(converted);
-        row.put(columnName, exprValue);
-      }
-      values.add(ExprTupleValue.fromExprValueMap(row));
+      values.add(readRow(resultSet, fieldTypes, metaData, utcCalendar));
     }
 
-    List<Column> columns = new ArrayList<>(metaData.getColumnCount());
-    for (int i = 1; i <= columnCount; ++i) {
-      String columnName = metaData.getColumnName(i);
-      RelDataType fieldType = fieldTypes.get(i - 1);
-      // TODO: Correct this after fixing issue github.com/opensearch-project/sql/issues/3751
-      //  The element type of struct and array is currently set to ANY.
-      //  We set them using the runtime type as a workaround.
-      ExprType exprType;
-      if (fieldType.getSqlTypeName() == SqlTypeName.ANY) {
-        if (!values.isEmpty()) {
-          exprType = values.getFirst().tupleValue().get(columnName).type();
-        } else {
-          // Using UNDEFINED instead of UNKNOWN to avoid throwing exception
-          exprType = ExprCoreType.UNDEFINED;
-        }
-      } else {
-        exprType = OpenSearchTypeFactory.convertRelDataTypeToExprType(fieldType);
-      }
-      columns.add(new Column(columnName, null, exprType));
-    }
+    List<Column> columns =
+        columns(metaData, fieldTypes, values.isEmpty() ? null : values.getFirst());
     // Drain before the timewrap block: its finally clears the same thread-local.
     List<Warning> warnings = CalcitePlanContext.drainWarnings();
 
@@ -176,5 +145,81 @@ public class CalciteResultSetBuilder {
     QueryResponse response = new QueryResponse(schema, values, null);
     response.setWarnings(warnings);
     return response;
+  }
+
+  /** Emits a schema and one converted row at a time, without retaining the output collection. */
+  public List<Warning> streamResultSet(
+      ResultSet resultSet,
+      RelDataType rowTypes,
+      QueryRowConsumer consumer,
+      QueryCancellation cancellation)
+      throws Exception {
+    if (TimewrapPivot.isTimewrap()) {
+      throw new UnsupportedOperationException(
+          "timewrap requires materialization and cannot be streamed");
+    }
+    ResultSetMetaData metadata = resultSet.getMetaData();
+    List<RelDataType> types =
+        rowTypes.getFieldList().stream().map(RelDataTypeField::getType).toList();
+    var calendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
+    cancellation.check();
+    ExprValue first = resultSet.next() ? readRow(resultSet, types, metadata, calendar) : null;
+    cancellation.check();
+    consumer.schema(new Schema(columns(metadata, types, first)));
+    cancellation.check();
+    if (first != null) consumer.row(first);
+    while (true) {
+      cancellation.check();
+      if (!resultSet.next()) break;
+      cancellation.check();
+      consumer.row(readRow(resultSet, types, metadata, calendar));
+    }
+    return CalcitePlanContext.drainWarnings();
+  }
+
+  private ExprValue readRow(
+      ResultSet resultSet,
+      List<RelDataType> fieldTypes,
+      ResultSetMetaData metadata,
+      Calendar calendar)
+      throws SQLException {
+    Map<String, ExprValue> row = new LinkedHashMap<>();
+    for (int i = 1; i <= metadata.getColumnCount(); i++) {
+      Object value =
+          preserveNativeTypes && fieldTypes.get(i - 1).getSqlTypeName() == SqlTypeName.TIMESTAMP
+              ? resultSet.getTimestamp(i, calendar)
+              : resultSet.getObject(i);
+      row.put(
+          metadata.getColumnName(i),
+          ExprValueUtils.fromObjectValue(processValue(value, fieldTypes.get(i - 1))));
+    }
+    return ExprTupleValue.fromExprValueMap(row);
+  }
+
+  private List<Column> columns(
+      ResultSetMetaData metaData, List<RelDataType> fieldTypes, ExprValue firstRow)
+      throws SQLException {
+    int columnCount = metaData.getColumnCount();
+    List<Column> columns = new ArrayList<>(metaData.getColumnCount());
+    for (int i = 1; i <= columnCount; ++i) {
+      String columnName = metaData.getColumnName(i);
+      RelDataType fieldType = fieldTypes.get(i - 1);
+      // TODO: Correct this after fixing issue github.com/opensearch-project/sql/issues/3751
+      //  The element type of struct and array is currently set to ANY.
+      //  We set them using the runtime type as a workaround.
+      ExprType exprType;
+      if (fieldType.getSqlTypeName() == SqlTypeName.ANY) {
+        if (firstRow != null) {
+          exprType = firstRow.tupleValue().get(columnName).type();
+        } else {
+          // Using UNDEFINED instead of UNKNOWN to avoid throwing exception
+          exprType = ExprCoreType.UNDEFINED;
+        }
+      } else {
+        exprType = OpenSearchTypeFactory.convertRelDataTypeToExprType(fieldType);
+      }
+      columns.add(new Column(columnName, null, exprType));
+    }
+    return columns;
   }
 }

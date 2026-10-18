@@ -8,6 +8,8 @@ package org.opensearch.sql.spring;
 import java.util.Properties;
 import org.opensearch.sql.api.UnifiedQueryService;
 import org.opensearch.sql.backend.QueryBackend;
+import org.opensearch.sql.job.LocalQueryJobService;
+import org.opensearch.sql.job.QueryJobService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -19,6 +21,12 @@ import org.springframework.context.annotation.Configuration;
 @AutoConfiguration
 @EnableConfigurationProperties(UnifiedQueryProperties.class)
 public class UnifiedQueryAutoConfiguration {
+  @Bean
+  @ConditionalOnMissingBean(QueryJobService.class)
+  LocalQueryJobService queryJobService() {
+    return new LocalQueryJobService();
+  }
+
   @Bean
   @ConditionalOnMissingBean({ConfiguredQueryBackends.class, UnifiedQueryService.class})
   ConfiguredQueryBackends configuredQueryBackends(

@@ -325,6 +325,51 @@ class ElasticsearchExecutionPlanTest {
   }
 
   /** A loopback transport that pages documents, rotates PIT IDs, and injects explicit failures. */
+  @ParameterizedTest
+  @EnumSource(QueryType.class)
+  void streamsMoreThanTenThousandRowsAndClosesPit(QueryType type) throws Exception {
+    try (Fixture fixture = new Fixture(12005)) {
+      AtomicInteger rows = new AtomicInteger();
+      fixture.service.stream(
+          null,
+          type,
+          type == QueryType.SQL ? "SELECT id FROM events" : "source=events | fields id",
+          new org.opensearch.sql.executor.QueryRowConsumer() {
+            public void schema(org.opensearch.sql.executor.ExecutionEngine.Schema schema) {}
+
+            public void row(org.opensearch.sql.data.model.ExprValue row) {
+              assertEquals(rows.getAndIncrement(), row.tupleValue().get("id").integerValue());
+            }
+          },
+          new org.opensearch.sql.executor.QueryCancellation());
+      assertEquals(12005, rows.get());
+      fixture.assertClosedLatestPit(14);
+      assertTrue(fixture.pageSizes().stream().allMatch(size -> size <= 1000));
+    }
+  }
+
+  @Test
+  void streamingSinkFailureClosesPit() throws Exception {
+    try (Fixture fixture = new Fixture(12005)) {
+      assertThrows(
+          IllegalStateException.class,
+          () ->
+              fixture.service.stream(
+                  null,
+                  QueryType.SQL,
+                  "SELECT id FROM events",
+                  new org.opensearch.sql.executor.QueryRowConsumer() {
+                    public void schema(org.opensearch.sql.executor.ExecutionEngine.Schema schema) {}
+
+                    public void row(org.opensearch.sql.data.model.ExprValue row) throws Exception {
+                      throw new IOException("disk full");
+                    }
+                  },
+                  new org.opensearch.sql.executor.QueryCancellation()));
+      fixture.assertClosedLatestPit(1);
+    }
+  }
+
   private static final class Fixture implements AutoCloseable {
     private final ObjectMapper mapper = new ObjectMapper();
     private final HttpServer server;

@@ -5,6 +5,9 @@
 
 package org.opensearch.sql.protocol.response.format;
 
+import java.util.List;
+import org.opensearch.sql.data.model.ExprValue;
+import org.opensearch.sql.executor.ExecutionEngine.Schema;
 import org.opensearch.sql.protocol.response.QueryResult;
 
 /** Response formatter to format response to csv format. */
@@ -35,6 +38,21 @@ public class CsvResponseFormatter implements ResponseFormatter<QueryResult> {
       flatResponse = new FlatResponseBase(response, separator);
     }
     return flatResponse.format();
+  }
+
+  /** Formats just the header, including the same escaping and sanitization as buffered output. */
+  public String formatHeader(Schema schema) {
+    return format(new QueryResult(schema, List.of()));
+  }
+
+  /** Formats one row without accumulating the rest of the result set. */
+  public String formatRow(ExprValue row) {
+    QueryResult result = new QueryResult(new Schema(List.of()), List.of(row));
+    FlatResponseBase flat =
+        sanitize
+            ? new FlatResponseWithSanitizer(result, separator)
+            : new FlatResponseBase(result, separator);
+    return flat.getDataLines().getFirst();
   }
 
   @Override

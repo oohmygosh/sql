@@ -17,13 +17,13 @@ import org.opensearch.sql.executor.pagination.Cursor;
 /**
  * Wire-protocol response for a query submission.
  *
- * <p>{@link Rows} and {@link Explain} are engine-produced payloads stored in {@link
+ * <p>{@link Rows}, {@link Explain} and {@link Export} are engine-produced payloads stored in {@link
  * QueryJobStatus#result()}. {@link Running} is produced only at the submit-time wait boundary when
  * the {@code wait_for_completion_timeout} budget expires; it is never persisted on a {@code
  * QueryJobStatus} and carries just the id the client polls with.
  */
 public sealed interface QueryResult
-    permits QueryResult.Rows, QueryResult.Explain, QueryResult.Running {
+    permits QueryResult.Rows, QueryResult.Explain, QueryResult.Running, QueryResult.Export {
 
   /** Elapsed execution time on the owner node; {@code 0} for {@link Running}. */
   long tookMillis();
@@ -49,6 +49,15 @@ public sealed interface QueryResult
       Objects.requireNonNull(response, "response must not be null");
       if (tookMillis < 0) {
         throw new IllegalArgumentException("tookMillis must not be negative");
+      }
+    }
+  }
+
+  /** Metadata only: exported rows are owned by the hosting adapter's file store. */
+  record Export(long exportedRows, long fileSizeBytes, long tookMillis) implements QueryResult {
+    public Export {
+      if (exportedRows < 0 || fileSizeBytes < 0 || tookMillis < 0) {
+        throw new IllegalArgumentException("Export counters must not be negative");
       }
     }
   }

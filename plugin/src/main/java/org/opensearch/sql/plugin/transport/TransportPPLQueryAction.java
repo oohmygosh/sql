@@ -361,6 +361,8 @@ public class TransportPPLQueryAction
               createExplainResponseListener(transformedRequest, ctxListener)
                   .onResponse(explain.response());
             }
+            case org.opensearch.sql.job.QueryResult.Export ignored ->
+                responseListener.onFailure(new IllegalStateException("Unexpected export result"));
             case org.opensearch.sql.job.QueryResult.Running running ->
                 ctxListener.onResponse(new TransportPPLQueryResponse(formatRunning(running)));
           }
