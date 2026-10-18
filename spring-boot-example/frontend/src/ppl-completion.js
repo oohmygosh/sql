@@ -2,7 +2,10 @@ import { ATN, ATNDeserializer, CharStream, CommonTokenStream, LexerInterpreter, 
 import { CodeCompletionCore } from 'antlr4-c3';
 import { quoteIdentifier } from './results.js';
 
-const PREFERRED_RULES = ['tableQualifiedName', 'qualifiedName', 'wcQualifiedName', 'keywordsCanBeId', 'searchableKeyWord'];
+const PREFERRED_RULES = ['tableQualifiedName', 'qualifiedName', 'wcQualifiedName', 'keywordsCanBeId', 'searchableKeyWord', 'comparisonOperator', 'searchComparisonOperator'];
+// ANTLR does not publish literal names for lexer rules written as multiple character literals.
+// These spellings are offered only when c3 reaches the grammar's comparisonOperator rule.
+const COMPARISON_TEXT = { EQUAL: '=', NOT_EQUAL: '!=', GREATER: '>', NOT_LESS: '>=', LESS: '<', NOT_GREATER: '<=' };
 
 function integers(values, name) {
   if (!Array.isArray(values)) throw new Error(`PPL 语法包缺少 ${name}`);
@@ -92,12 +95,10 @@ function qualifiedIdentifierEnd(tokens, offsets, symbolicNames, end) {
   return end;
 }
 
-function configuredFields(parser, parserRules, config) {
+function configuredFields(tree, parserRules, config) {
   if (!config || typeof config.table !== 'string' || !config.table) return [];
   // SOURCE and INDEX can also name expression fields. The interpreted tree distinguishes them
   // from actual source clauses and counts tables for every JOIN form without a command list.
-  parser.reset();
-  const tree = parser.parse(0);
   const sources = [], tables = [];
   let hasJoin = false;
   const visit = (node, parents = []) => {
@@ -113,6 +114,25 @@ function configuredFields(parser, parserRules, config) {
     tables[0].parents.includes('subSearch') || unquoteIdentifier(tables[0].node.getText()) !== config.table) return [];
   return [...new Set([...(Array.isArray(config.sourceFields) ? config.sourceFields.map(field => field?.name) : []), config.timeField])]
     .filter(field => typeof field === 'string' && field.length > 0);
+}
+
+function whereFieldAtCaret(tree, parserRules, text, caret, offsets) {
+  let field;
+  const visit = (node, parents = []) => {
+    const name = parserRules[node.ruleIndex];
+    if (!name) return;
+    if (name === 'fieldExpression' && parents.some(parent => parserRules[parent.ruleIndex] === 'whereCommand')) {
+      const logical = parents.findLast(parent => parserRules[parent.ruleIndex] === 'logicalExpression');
+      const end = offsets[node.stop?.stop + 1];
+      // A bare predicate field needs a comparison, whereas a field on the right of an
+      // existing comparison or inside a finished function must not reopen suggestions.
+      if (logical?.start?.tokenIndex === node.start?.tokenIndex && logical?.stop?.tokenIndex === node.stop?.tokenIndex &&
+        end <= caret && !text.slice(end, caret).trim()) field = node;
+    }
+    for (const child of node.children || []) visit(child, [...parents, node]);
+  };
+  visit(tree);
+  return field;
 }
 
 export function createPplCompletion(bundle) {
@@ -138,6 +158,11 @@ export function createPplCompletion(bundle) {
   const visitRules = new Set(integers(bundle.rulesToVisit, 'rulesToVisit'));
   const preferredRules = new Set(PREFERRED_RULES.map(name => parserRules.indexOf(name)).filter(index => index >= 0 && visitRules.has(index)));
   const ignoredTokens = new Set([...integers(bundle.ignoredTokens, 'ignoredTokens'), Token.EOF]);
+  const comparisonTokens = new Set();
+  for (const name of ['comparisonOperator', 'searchComparisonOperator']) {
+    const index = parserRules.indexOf(name);
+    if (index >= 0) for (const type of parserATN.nextTokens(parserATN.ruleToStartState[index]).toArray()) comparisonTokens.add(type);
+  }
   const functionTokens = new Set();
   parserRules.forEach((name, index) => {
     if (/(?:FunctionName|FunctionCall|AggFunction)$/.test(name) || ['statsFunction', 'windowFunction'].includes(name)) {
@@ -152,26 +177,30 @@ export function createPplCompletion(bundle) {
     complete(text, caretUtf16, sourceConfig) {
       if (typeof text !== 'string' || !Number.isInteger(caretUtf16) || caretUtf16 < 0 || caretUtf16 > text.length) return [];
       const offsets = codePointOffsets(text);
+      if (!offsets.includes(caretUtf16)) return [];
       const lexer = new LexerInterpreter('OpenSearchPPLLexer', vocabulary, lexerRules, channelNames, modeNames, lexerATN, CharStream.fromString(text));
       lexer.removeErrorListeners();
       const stream = new CommonTokenStream(lexer);
       stream.fill();
       const tokens = stream.getTokens();
-      const cursor = cursorContext(text, caretUtf16, tokens, offsets, symbolicNames);
+      let cursor = cursorContext(text, caretUtf16, tokens, offsets, symbolicNames);
       if (!cursor) return [];
-      const caretToken = tokens.find(token => token.channel === Token.DEFAULT_CHANNEL &&
-        (token.type === Token.EOF || offsets[token.start] >= cursor.from));
       const parser = new PplParser('OpenSearchPPLParser', vocabulary, parserRules, parserATN, stream);
       parser.removeErrorListeners();
+      const tree = parser.parse(0);
+      const fields = configuredFields(tree, parserRules, sourceConfig);
+      const field = whereFieldAtCaret(tree, parserRules, text, caretUtf16, offsets);
+      const needsComparison = field && (cursor.from === cursor.to || fields.includes(unquoteIdentifier(field.getText())));
+      if (needsComparison) cursor = { from: caretUtf16, to: caretUtf16 };
+      const caretToken = tokens.find(token => token.channel === Token.DEFAULT_CHANNEL &&
+        (token.type === Token.EOF || offsets[token.start] >= cursor.from));
       // c3 returns possible continuations, including clauses which still need arguments. Once
       // a query can end here, wait for an explicit new prefix instead of offering those fragments.
       const lastToken = tokens.filter(token => token.channel === Token.DEFAULT_CHANNEL && token.type !== Token.EOF).at(-1);
-      if (cursor.from === cursor.to && !text.slice(caretUtf16).trim() && symbolicNames[lastToken?.type] !== 'PIPE') {
-        parser.parse(0);
-        if (parser.numberOfSyntaxErrors === 0 && !tokens.some(token =>
+      if (!needsComparison && cursor.from === cursor.to && !text.slice(caretUtf16).trim() && symbolicNames[lastToken?.type] !== 'PIPE' &&
+        parser.numberOfSyntaxErrors === 0 && !tokens.some(token =>
           symbolicNames[token.type] === 'ERROR_RECOGNITION' && /\S/u.test(token.text || ''))) return [];
-        parser.reset();
-      }
+      parser.reset();
       const core = new CodeCompletionCore(parser);
       core.ignoredTokens = ignoredTokens;
       core.preferredRules = preferredRules;
@@ -179,15 +208,33 @@ export function createPplCompletion(bundle) {
       const result = [];
       const previous = tokens.filter(token => token.type !== Token.EOF && token.channel === Token.DEFAULT_CHANNEL && offsets[token.stop + 1] <= cursor.from).at(-1);
       const commandStart = !previous || symbolicNames[previous.type] === 'PIPE';
-      const add = (label, insertText, from, to, kind) => {
+      const inWhere = rule => rule.ruleList.some(index => parserRules[index] === 'whereCommand');
+      const fieldsOnly = cursor.from === caretUtf16 && ['WHERE', 'AND', 'OR', 'XOR', 'NOT'].includes(symbolicNames[previous?.type]) &&
+        [...candidates.rules].some(([index, rule]) => parserRules[index] === 'qualifiedName' && inWhere(rule));
+      // The right operand can be any user value. Do not reopen the field/function menu
+      // immediately after the comparison; an explicit value prefix can still be completed.
+      if (cursor.from === cursor.to && comparisonTokens.has(previous?.type) && [...candidates.rules.values()].some(inWhere)) return [];
+      const add = (label, insertText, from, to, kind, trailingSpace = false) => {
+        if (fieldsOnly && kind !== 'field') return;
+        if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || from > caretUtf16 || to < caretUtf16 || to > text.length) return;
         const prefix = unquoteIdentifier(text.slice(from, caretUtf16)).toLowerCase();
         if (!label.toLowerCase().startsWith(prefix)) return;
-        if (caretUtf16 >= to && unquoteIdentifier(text.slice(from, to)).toLowerCase() === label.toLowerCase()) return;
+        if (kind !== 'function' && caretUtf16 >= to && unquoteIdentifier(text.slice(from, to)).toLowerCase() === label.toLowerCase()) return;
         const before = text.slice(0, from), after = text.slice(to);
-        if (/[\p{L}\p{N}_@`'"\)\]]$/u.test(before) && /^[\p{L}_@`]/u.test(insertText)) insertText = ' ' + insertText;
-        if (kind === 'keyword' && !/^\s/.test(after)) insertText += ' ';
+        if (/[\p{L}\p{N}_@`'"\)\]]$/u.test(before) && (kind === 'operator' || /^[\p{L}_@`]/u.test(insertText))) insertText = ' ' + insertText;
+        if ((kind === 'keyword' || kind === 'operator' || trailingSpace) && !/^\s/.test(after)) insertText += ' ';
         result.push({ label, insertText, from, to, kind });
       };
+      if (needsComparison) {
+        for (const [index] of candidates.rules) {
+          if (!['comparisonOperator', 'searchComparisonOperator'].includes(parserRules[index])) continue;
+          for (const type of parserATN.nextTokens(parserATN.ruleToStartState[index]).toArray()) {
+            const label = COMPARISON_TEXT[symbolicNames[type]];
+            if (label) add(label, label, cursor.from, cursor.to, 'operator');
+          }
+        }
+        return result.sort((left, right) => left.label.localeCompare(right.label));
+      }
       for (const [type] of candidates.tokens) {
         const literal = literalNames[type];
         if (!literal || literal.length < 3 || literal[0] !== "'" || literal.at(-1) !== "'") continue;
@@ -195,8 +242,6 @@ export function createPplCompletion(bundle) {
         if (!/[a-z]/i.test(label)) continue;
         add(label, label, cursor.from, cursor.to, !commandStart && functionTokens.has(type) ? 'function' : 'keyword');
       }
-      const needsFields = [...candidates.rules.keys()].some(index => ['qualifiedName', 'wcQualifiedName'].includes(parserRules[index]));
-      const fields = needsFields ? configuredFields(parser, parserRules, sourceConfig) : [];
       const identifierTo = qualifiedIdentifierEnd(tokens, offsets, symbolicNames, cursor.to);
       for (const [index, rule] of candidates.rules) {
         const name = parserRules[index];
@@ -204,11 +249,13 @@ export function createPplCompletion(bundle) {
         if (name === 'tableQualifiedName' && typeof sourceConfig?.table === 'string' && sourceConfig.table) {
           add(sourceConfig.table, quoteIdentifier(sourceConfig.table), from, identifierTo, 'table');
         } else if (name === 'qualifiedName' || name === 'wcQualifiedName') {
-          for (const field of fields) add(field, quoteIdentifier(field), from, identifierTo, 'field');
+          for (const field of fields) add(field, quoteIdentifier(field), from, identifierTo, 'field', inWhere(rule));
         }
       }
-      return [...new Map(result.map(item => [`${item.kind}:${item.label}:${item.from}:${item.to}`, item])).values()]
-        .sort((left, right) => left.label.localeCompare(right.label));
+      // Fields are added last so configured metadata wins over an identically named
+      // grammar function (for example timestamp) at the same edit range.
+      return [...new Map(result.map(item => [`${item.label.toLowerCase()}:${item.from}:${item.to}`, item])).values()]
+        .sort((left, right) => Number(right.kind === 'field') - Number(left.kind === 'field') || left.label.localeCompare(right.label));
     },
   };
 }

@@ -13,7 +13,7 @@ The embedded entry point uses the existing SQL/PPL parsers, Calcite planner, fun
 | `clickhouse` | JDBC schemas, conservative ClickHouse dialect/convention and relational pushdown |
 | `spring-boot-autoconfigure` | Properties, optional backend factories, ownership and user bean overrides |
 | `spring-boot-starter` | Minimal dependency bundle; database backends are selected separately |
-| `spring-boot-example` | Executable Spring Boot Web example with SQL/PPL CSV export |
+| `spring-boot-example` | Search HTTP/UI policy, fixed-time rows and histograms, synchronous/asynchronous streaming CSV |
 
 The shared API no longer has a runtime dependency on the OpenSearch server through `protocol`. OpenSearch error adapters are discovered only when the OpenSearch module is present. The original plugin keeps its own scheduling, resource protection and legacy `PhysicalPlan` execution path. `DelegatingExecutionEngine` continues to select vectorized execution extensions; it is not a data source router.
 
@@ -68,33 +68,83 @@ unified-query:
     #   url: ${OPENSEARCH_URL}
 ```
 
-`unified-query.settings` accepts existing engine setting names. No new query timeouts, row caps, scan quotas, memory limits, rate limits or execution modes are introduced. Existing `UnifiedQueryContext`/`SysLimit` defaults still apply, including the existing output size setting. Transport page size and PIT renewal are internal pagination mechanics, not total-result limits.
+`unified-query.settings` accepts existing engine setting names. Existing
+`UnifiedQueryContext`/`SysLimit` defaults still apply to the ordinary collected execution API.
+The example's structured search windows use separate host bounds: `unified-query.search.max-page-size`
+(default 1000), `max-offset` (100000), and `max-buckets` (2000). They do not silently reuse the
+interactive `plugins.query.size_limit` as a total-result limit. Transport page size and PIT renewal
+remain internal mechanics and do not provide a cross-request HTTP cursor or snapshot.
+
+Search time defaults are configured under `unified-query.search.default-time-zone` (default
+`Asia/Shanghai`) and `time-fields` (a source-name to source-field map). An explicit
+`timeRange.field` overrides that source default; no configured or explicit field is an error.
+`unified-query.ui.default-tables` supplies query templates only, and
+`unified-query.ui.source-fields.<source>` contains `{name,type}` entries for reliable source-field
+controls. The UI displays result aliases separately. `GET /ui/config` returns these display
+properties and the top-level `maxPageSize`, without connection addresses or credentials.
 
 The ClickHouse URL constructor sets `join_use_nulls=1`, `join_default_strictness=ALL`, and `union_default_mode=DISTINCT` to preserve SQL outer-join/duplicate-row semantics. An externally supplied JDBC DataSource must use those semantics too. This does not modify server-global settings. JDBC properties can be passed under the data source's `properties` map. OpenSearch `properties` are interpreted as its existing cluster setting names.
 
 ## Querying
 
+`UnifiedQueryService` and the shared planner accept one immutable `QueryExecutionRequest`.
+The hosting service resolves relative time and decides which result parts to request; the
+library receives absolute instants and typed constraints:
+
 ```java
 @Autowired UnifiedQueryService queries;
 
-var sql = queries.execute("logs", QueryType.SQL,
-    "SELECT department, count(*) AS n FROM employees GROUP BY department");
-var ppl = queries.execute("analytics", QueryType.PPL,
-    "source=employees | stats count() as n by department");
-var plan = queries.explain("logs", QueryType.SQL,
-    "SELECT id FROM employees WHERE id > 10 ORDER BY id");
-var highlighted = queries.execute("logs", QueryType.PPL,
-    "source=employees | where match(message, 'error') | fields message,_highlight",
-    new HighlightConfig(List.of("message")));
+var base = new QueryExecutionRequest(
+    "logs", QueryType.SQL, "SELECT message FROM application_logs ORDER BY timestamp",
+    new QueryExecutionRequest.TimeRange("timestamp",
+        Instant.parse("2026-10-17T08:00:00Z"), Instant.parse("2026-10-18T08:00:00Z"),
+        ZoneId.of("Asia/Shanghai")),
+    List.of(new QueryExecutionRequest.FieldFilter("level", "eq", "ERROR")), null, null);
+
+var rows = queries.execute(base.withWindow(new QueryExecutionRequest.ResultWindow(0, 51)));
+var plan = queries.explain(base);
+queries.stream(base, consumer, cancellation);
+var histogram = queries.execute(base.withHistogram(
+    new QueryExecutionRequest.Histogram("timestamp", "1h", ZoneId.of("Asia/Shanghai"))));
 ```
 
-The default-source overload is `execute(QueryType, String)`. If exactly one backend exists, it is selected by default. Multiple backends require a default or an explicit source. Duplicate names and missing drivers produce configuration errors. `QueryResponse` retains existing schema, rows, cursor, warning and error fields. Native precision is preserved for new-backend decimal/unsigned numeric results; the existing schema type family labels these numbers as `DOUBLE` because the common ExprType model has no decimal member. The OpenSearch formatter's numeric behavior remains unchanged.
+The structured signatures are `execute(QueryExecutionRequest)`, `explain(QueryExecutionRequest)`,
+and `stream(QueryExecutionRequest, QueryRowConsumer, QueryCancellation)`.
+`UnifiedQueryPlanner.plan(QueryExecutionRequest)` binds external conditions immediately above
+the unique source scan through typed expressions and plan nodes. It preserves the original
+SQL/PPL text, OR grouping, `HAVING`, and PPL operators after `stats`. Unknown fields, invalid
+literal types, and ambiguous binding across joins or branches fail rather than ignoring inputs.
+Filters support `eq/ne/gt/gte/lt/lte/in/is_null/is_not_null/contains`; `contains` treats its value
+literally, including SQL wildcard characters. Time uses `[from,to)` and does not require the
+source time field to appear in the result projection.
 
-Backend clients are shared, but each invocation owns a separate planner and Calcite connection. JDBC statements/result sets and ES PIT contexts close on normal completion, early result termination or errors. Application-provided backend beans override configuration by name and are not closed twice. `UnifiedQueryService` borrows backends; callers using it without Spring own their backends' lifetimes.
+Result windows wrap the complete user result and retain explicit `LIMIT/head`. A host may ask
+for one sentinel row (51 in the example), trim it, and calculate `hasNext`. Unordered requests
+return `UNSTABLE_ORDER`; bounded page numbers do not promise consistency across concurrent
+writes. A histogram is a separate plan before the page window; it reuses the same source
+constraints and respects explicit query limits. Aggregate, distinct, window, join and other
+unsupported shapes throw `UnsupportedHistogramException`. Histogram output columns are
+`__search_bucket` (UTC timestamp) and `__search_count` (long). The host fills empty buckets and
+reports unsupported/error states independently of successful rows.
+
+The original text-based execute/explain overloads remain available to embedded callers, including
+the default-source `execute(QueryType, String)`. If exactly one backend exists it is selected by
+default; multiple backends require a configured default or explicit source. Duplicate names and
+missing drivers produce configuration errors. The engine's `ExecutionEngine.QueryResponse`
+retains schema, rows, cursor, warnings and error fields. Native decimal/unsigned precision is
+preserved by new backends; the common ExprType family labels these values `DOUBLE` because it
+has no decimal member. The OpenSearch formatter's numeric behavior remains unchanged.
+
+Backend clients are shared, but each invocation owns a separate planner and Calcite connection.
+JDBC statements/result sets and ES PIT contexts close on completion, early termination,
+cancellation or errors. Application-provided backend beans override configuration by name and
+are not closed twice. `UnifiedQueryService` borrows backends; callers outside Spring own backend
+lifetimes.
 
 ## Execution behavior
 
 * ES lowers supported filters, direct projections, sorting/limits and compatible grouping/metric operations to DSL. Filters include three-valued boolean/NOT logic, exact-keyword LIKE/ILIKE and a restricted regex subset. Metrics include conditional counts/aggregate filters, variance/standard deviation and approximate percentile/median with compression. Compatible time `span` uses composite `date_histogram`: positive integer fixed intervals from milliseconds through days, or one calendar week/month/quarter/year with UTC boundaries. Numeric integral `span` uses parameterized long-arithmetic script terms to preserve truncation and large integers; safe floating spans and bounded-integer fixed bins use histogram sources. Composite aggregation enumerates all buckets across pages. Arbitrary computed metrics, unsafe mappings/types/intervals, checked integer sums and unsupported patterns retain local execution. Exact DISTINCT stays exact; explicit approximate aggregates use approximate backend functions. See [the PPL pushdown audit](elasticsearch-ppl-pushdown-audit.md) for detailed limits, validation and remaining opportunities.
+* Search histograms use the separate internal `SEARCH_TIME_BUCKET` operator for `1m/1h/1d` buckets aligned to the supplied business time zone, including daylight transitions. ES emits a composite `date_histogram` with `calendar_interval` and `time_zone`; ClickHouse lowers the bucket function to timezone-aware interval starts and UTC instants. This does not change existing SQL/PPL `span` semantics. The host returns natural bucket boundaries and limits counts in the first/last bucket to the selected search range.
 * ES provides mapping-driven columns, `_id`, `_index`, `_score`, full-text query functions and optional highlighting. Nested objects are returned as arrays of objects; this does not emulate every native nested-query or parent/child feature. Primitive arrays need an explicit field type declaration, because their array shape is absent from ES mappings.
 * ClickHouse uses JDBC relational pushdown. Unknown PPL UDFs and checked integer aggregates remain in Calcite rather than being sent as nonexistent native functions. Empty aggregate and outer-join null semantics are adapted explicitly.
 * Shared operators handle same-source joins, subqueries, windows and supported PPL expressions when they are not pushed down. Window execution currently stays local for the ClickHouse JDBC convention.
@@ -134,20 +184,66 @@ Configure the backend connections through environment variables or add
 configuration file. Use the standard Spring Boot `--server.port` option to change the port.
 The Spring context remains active until application shutdown.
 
-Submit SQL or PPL to `POST /query/export` to download the returned rows as CSV. For example,
-with an existing `employees` table in the configured ClickHouse database:
+The example's HTTP adapter is `SearchController`; `SearchService` resolves and validates time,
+coordinates rows and histograms, and delegates to the structured API. `SearchRequest` /
+`SearchResponse` define search HTTP DTOs; `ExportRequest` contains the shared export context.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| POST | `/search` | Rows, histogram, or both |
+| POST | `/search/export` | Synchronous CSV |
+| POST | `/search/export/tasks` | Submit asynchronous CSV |
+| GET | `/search/export/tasks/{id}` | Poll export progress |
+| GET | `/search/export/tasks/{id}/file` | Download a successful task |
+| GET | `/ui/config` | UI display configuration |
+
+For an existing `employees` table in the configured ClickHouse database:
+
+```sh
+curl --fail --request POST 'http://localhost:8080/search' \
+  --header 'Content-Type: application/json' \
+  --data-raw '{"source":"analytics","language":"PPL","query":"source=employees | fields timestamp,message","timeRange":{"field":"timestamp","from":"now-1d","to":"now","timeZone":"Asia/Shanghai"},"filters":[{"field":"message","operator":"contains","value":"error"}],"page":{"number":1,"size":50},"histogram":{"interval":"auto"},"include":["rows","histogram"]}'
+```
+
+`query` is required; source and language default to the configured source and SQL.
+`timeRange` is optional and filters default to an empty array. Both relative endpoints are
+resolved from one clock instant, and the response returns `resolvedTimeRange`. Reuse that
+absolute range for pages, chart refreshes and exports; a new search resolves `now` again. Time input supports millisecond precision; finer absolute input is rejected with HTTP 400, and generated `now` is resolved to milliseconds.
+The response contains `rows:{schema,datarows}`, `page:{number,size,hasNext}`,
+`histogram:{status,interval,timeZone,buckets:[{from,to,count}],reason}`, and warnings as applicable.
+Unrequested parts are omitted and there is no total-hit count derived from page length.
+
+`include` defaults to `["rows"]`; `["histogram"]` and both parts are supported. Page defaults are
+one-based page 1 / 50 rows, bounded by host configuration. Page-only refreshes use
+`include:["rows"]` and keep the original histogram. Auto intervals are minutes for ranges up
+to one hour, hours through one day, and calendar days thereafter. Supported explicit intervals
+are `1m/minute`, `1h/hour`, and `1d/day`. Automatic charts require finite time; unsupported
+query shapes return `status:"unsupported"`, while execution or bucket-cap failures return
+`status:"error"` and a reason without replacing successful rows. Invalid intervals remain
+request errors.
+
+Synchronous and asynchronous exports accept only source, language, query, timeRange and filters;
+UI page/histogram/include fields are rejected. Copy the successful search's absolute context:
 
 ```sh
 curl --fail --output result.csv \
-  --request POST 'http://localhost:8080/query/export' \
+  --request POST 'http://localhost:8080/search/export' \
   --header 'Content-Type: application/json' \
-  --data-raw '{"source":"analytics","language":"PPL","query":"source=employees | stats count() as n by department"}'
+  --data-raw '{"source":"analytics","language":"PPL","query":"source=employees | fields timestamp,message","timeRange":{"field":"timestamp","from":"2026-10-17T08:00:00Z","to":"2026-10-18T08:00:00Z","timeZone":"Asia/Shanghai"},"filters":[{"field":"message","operator":"contains","value":"error"}]}'
 ```
 
-The request requires `query`; `source` defaults to the configured default data source and
-`language` defaults to `SQL`. The existing output size limit still applies (default `10000`
-rows). See the [example README](../../spring-boot-example/README.md) for connection settings,
-SQL/PPL requests and response details.
+For an asynchronous task submit the same body to `/search/export/tasks`, follow its `202`
+response ID and context-path-aware Location, poll the status path, and download `/file` only
+when state is `SUCCEEDED`. The task freezes its conditions at submission. Both exports share
+typed source binding and a row-streaming runner rather than collecting all results in memory;
+explicit LIMIT/head remains effective, and the interactive output-size cap does not limit the
+export. Local blocking operators can still materialize data.
+
+The existing worker/queue/retained-task/file-cap/expiry/ownership rules apply to both export
+forms. Defaults under `unified-query.export` are 2 workers, queue capacity 16, 100 retained tasks,
+10 GiB per file and one-hour terminal retention. Files are local, expired files are cleaned up,
+and tasks do not survive a restart. See the [example README](../../spring-boot-example/README.md)
+for full DTO fields, HTTP statuses, CSV behavior and configuration.
 
 ## Expanded SQL/PPL result corpus
 

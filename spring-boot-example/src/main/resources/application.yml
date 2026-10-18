@@ -25,6 +25,9 @@ unified-query:
     time-fields:
       logs: timestamp
       analytics: timestamp
+    id-fields:
+      logs: id
+      analytics: id
   ui:
     default-tables:
       logs: ${ES_TEST_INDEX:logevent-*}

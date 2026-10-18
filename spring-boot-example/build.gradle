@@ -11,11 +11,6 @@ dependencies {
     runtimeOnly 'org.springframework.boot:spring-boot-starter-logging:3.5.9'
     implementation project(':elasticsearch')
     implementation project(':clickhouse')
-    testImplementation('org.springframework.boot:spring-boot-starter-test:3.5.9') {
-        // The engine already supplies org.json; avoid a second JSONObject implementation.
-        exclude group: 'com.vaadin.external.google', module: 'android-json'
-    }
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.12.2'
 }
 application { mainClass = 'org.opensearch.sql.example.QueryApplication' }
 
@@ -33,7 +28,7 @@ tasks.register('frontendBuild', Exec) {
     workingDir frontendDirectory
     commandLine npmCommand, 'run', 'build'
     inputs.files(fileTree('frontend') {
-        exclude 'node_modules/**', 'dist/**', 'test/**', 'README.md', '.env.local'
+        exclude 'node_modules/**', 'dist/**', 'README.md', '.env.local'
     })
     outputs.dir('frontend/dist')
 }
@@ -47,23 +42,4 @@ configurations.configureEach {
     exclude group: 'commons-logging', module: 'commons-logging'
     // Route engine Log4j API calls through Boot's SLF4J bridge to Logback.
     exclude group: 'org.apache.logging.log4j', module: 'log4j-core'
-}
-
-test {
-    useJUnitPlatform()
-    def liveConfigured = providers.environmentVariable('ES_PASSWORD').isPresent()
-            && providers.environmentVariable('CLICKHOUSE_PASSWORD').isPresent()
-    def auditConfigured = providers.environmentVariable('LIVE_QUERY_AUDIT').getOrElse('false') == 'true'
-    inputs.property('liveDataSourcesConfigured', liveConfigured)
-    inputs.property('liveQueryAuditConfigured', auditConfigured)
-    if (auditConfigured) {
-        inputs.file('build/reports/live-audit/cases.json')
-    }
-    // External data can change independently of the build inputs.
-    outputs.upToDateWhen { !liveConfigured && !auditConfigured }
-    outputs.cacheIf { !liveConfigured && !auditConfigured }
-    testLogging {
-        events 'passed', 'skipped', 'failed'
-        exceptionFormat 'full'
-    }
 }

@@ -16,13 +16,15 @@ public record SearchProperties(
     Integer maxOffset,
     Integer maxBuckets,
     String defaultTimeZone,
-    Map<String, String> timeFields) {
+    Map<String, String> timeFields,
+    Map<String, String> idFields) {
   public SearchProperties {
     maxPageSize = maxPageSize == null ? 1000 : maxPageSize;
     maxOffset = maxOffset == null ? 100000 : maxOffset;
     maxBuckets = maxBuckets == null ? 2000 : maxBuckets;
     defaultTimeZone = defaultTimeZone == null ? "Asia/Shanghai" : defaultTimeZone;
     timeFields = timeFields == null ? Map.of() : Map.copyOf(timeFields);
+    idFields = idFields == null ? Map.of() : Map.copyOf(idFields);
     ZoneId.of(defaultTimeZone);
     if (maxPageSize < 1
         || maxPageSize == Integer.MAX_VALUE

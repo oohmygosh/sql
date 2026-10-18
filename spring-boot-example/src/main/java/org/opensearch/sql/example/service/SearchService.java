@@ -34,19 +34,24 @@ public class SearchService {
   private final UnifiedQueryService queries;
   private final SearchProperties properties;
   private final SearchTimeResolver times;
+  private final SearchDefaultOrder order;
 
   public SearchService(
-      UnifiedQueryService queries, SearchProperties properties, SearchTimeResolver times) {
+      UnifiedQueryService queries,
+      SearchProperties properties,
+      SearchTimeResolver times,
+      SearchDefaultOrder order) {
     this.queries = queries;
     this.properties = properties;
     this.times = times;
+    this.order = order;
   }
 
   public QueryExecutionRequest exportRequest(ExportRequest request) {
     return new QueryExecutionRequest(
         request.source(),
         request.language(),
-        request.query(),
+        order.apply(request.source(), request.language(), request.query()),
         times.resolve(request.source(), request.timeRange()),
         request.filters(),
         null,
@@ -59,7 +64,7 @@ public class SearchService {
         new QueryExecutionRequest(
             request.source(),
             request.language(),
-            request.query(),
+            order.apply(request.source(), request.language(), request.query()),
             range,
             request.filters(),
             null,

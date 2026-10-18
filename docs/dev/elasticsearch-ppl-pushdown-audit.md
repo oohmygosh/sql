@@ -133,10 +133,9 @@ OpenSearch 通用脚本使用插件自己的 CALCITE/COMPOUNDED 引擎，不能�
 
 ```bash
 ./gradlew :elasticsearch:test
-./gradlew :spring-boot-example:test --tests '*QueryApplicationLiveTest.elasticsearchPplExecutesRealQuery'
 ```
 
-真实 ES 集成测试类依赖 `ELASTICSEARCH_TEST_URL` 等独立测试环境变量，缺失时会跳过；不要把跳过记成已验证。Spring 示例测试使用它自己的已配置数据源。
+真实 ES 集成测试类依赖 `ELASTICSEARCH_TEST_URL` 等独立测试环境变量，缺失时会跳过；不要把跳过记成已验证。
 
 建议后续依次推进：
 

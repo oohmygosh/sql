@@ -4,11 +4,13 @@
 
 ## 搜索前端
 
-访问 `http://localhost:8080/` 使用 Lens 搜索页面，源码及前端验证说明见 [`frontend/README.md`](frontend/README.md)。页面提交 SQL/PPL 原文、时间和结构化筛选；表名以语句为准，默认模板不自动添加 `LIMIT/head`。分页在后台执行，翻页只请求明细并保留图表。图表直接使用后台桶数据，点击桶缩小时间范围。查询历史保存完整条件，导出复用最后一次成功查询的固定时间与筛选。
+访问 `http://localhost:8080/` 使用 Lens 搜索页面，源码及前端使用说明见 [`frontend/README.md`](frontend/README.md)。页面提交 SQL/PPL 原文、时间和结构化筛选；表名以语句为准，默认模板不自动添加 `LIMIT/head`。分页在后台执行，翻页只请求明细并保留图表。图表直接使用后台桶数据，点击桶缩小时间范围。查询历史保存完整条件，导出复用最后一次成功查询的固定时间与筛选。
 
 `GET /ui/config` 仅提供数据源名称、类型、默认表、时间字段/时区及显式配置的源字段，并提供顶层 `maxPageSize`，不暴露连接地址和凭据。默认表为 `logevent-*` / `log_event`，可通过 `ES_TEST_INDEX` / `CLICKHOUSE_TEST_TABLE` 或 `unified-query.ui.default-tables` 覆盖。它们仅用于生成快捷语句；界面没有独立的表名输入框。字段面板区分源字段与结果列/别名，结果别名不能直接生成源字段筛选。
 
-`GET /ui/ppl/grammar` 返回当前引擎的 PPL 语法包，供前端在浏览器中计算语法提示。响应沿用 `/_plugins/_ppl/_grammar` 的 JSON 结构，包括 ANTLR 版本、语法 hash、lexer/parser ATN、词表及补全规则；无需查询参数，也不访问 Elasticsearch 或 ClickHouse。表名和源字段提示使用 `/ui/config` 的显式配置。
+`GET /ui/ppl/grammar` 返回当前引擎的 PPL 语法包，响应沿用 `/_plugins/_ppl/_grammar` 的 JSON 结构，包括 ANTLR 版本、语法 hash、lexer/parser ATN、词表及补全规则。浏览器首次进入 PPL 模式时加载一次并在当前页面缓存，用 `antlr4ng 3.0.16` 与 `antlr4-c3 3.4.3` 在本地解释 ATN，生成命令、函数、表、字段及操作符候选；刷新页面后可加载新语法。表名、源字段和时间字段使用 `/ui/config` 的显式配置，结果列不作为源字段候选。
+
+前端负责 150ms 防抖、键盘与组合输入处理、来源切换以及按 UTF-16 范围插入候选，补全时不向后端发送语句或光标。后端只提供语法包和配置，不接收补全请求，也不访问 Elasticsearch 或 ClickHouse 来计算候选。完整语句末尾和等待用户填写字面值的位置停止提示；补全不包含实时语法错误诊断。
 
 构建需要 Node.js 20.19+ 或 22.12+ 和 npm。`:spring-boot-example:bootJar` 自动安装锁定依赖、构建前端并打包到 JAR；运行 JAR 不需要 Node.js。IDE 直接启动前执行 `:spring-boot-example:processResources`，或独立运行 Vite。请求和异步任务链接支持 Spring servlet context path。
 
@@ -71,6 +73,9 @@ unified-query:
     time-fields:
       logs: timestamp
       analytics: timestamp
+    id-fields:
+      logs: id
+      analytics: id
   ui:
     default-tables:
       logs: logevent-*
@@ -126,7 +131,7 @@ IDE 可运行 `org.opensearch.sql.example.QueryApplication`，设置相同环境
 | GET | `/search/export/tasks/{id}` | 查看任务进度 |
 | GET | `/search/export/tasks/{id}/file` | 下载成功文件 |
 | GET | `/ui/config` | 页面初始化显示配置 |
-| GET | `/ui/ppl/grammar` | 当前引擎的 PPL 语法包 |
+| GET | `/ui/ppl/grammar` | 浏览器本地 PPL 补全使用的语法包 |
 
 请求使用 `Content-Type: application/json`。`query` 必填且非空；`source` 省略时使用默认数据源；`language` 大小写不敏感，省略时为 SQL。
 
@@ -177,7 +182,9 @@ curl --fail --request POST 'http://localhost:8080/search' \
 
 外部条件在源数据读取之后、用户原有过滤/计算/聚合之前执行；保留原语句 OR 分组、HAVING 和 PPL stats 后 where 的位置。条件冲突返回空结果。不存在的字段、错误类型、无法明确绑定条件的连接/多分支查询直接报错，不猜测筛选目标。时间字段无需出现在最终投影中。
 
-分页在完整用户结果外执行，多取一行判断 `hasNext`，保留手写 `LIMIT/head` 的边界与原有排序。没有稳定排序时返回 `UNSTABLE_ORDER` 提示；持续写入下的有界页码不保证跨请求快照一致性。底层 PIT/JDBC 分页不是 HTTP 跨请求游标。
+分页在完整用户结果外执行，多取一行判断 `hasNext`，保留手写 `LIMIT/head` 的边界与原有排序。示例层对未指定排序的普通单源明细查询，按该数据源的 `time-fields`、`id-fields` 两个字段倒序排序；两项都配置才启用，`id-fields` 应指向可排序且在查询范围内唯一的业务 ID（ES 使用业务字段 `id`，不是 `_id`）。排序在投影和 `LIMIT/head` 前生效，时间和 ID 无需出现在返回列中；搜索、时间图和导出使用相同策略。已有排序保持原样，聚合、去重、连接、子查询、窗口及其他无法安全补排序的查询不自动改写，未排序的分页仍会返回 `UNSTABLE_ORDER`。此策略仅在 `spring-boot-example` 实现，不改变核心框架。
+
+时间加唯一 ID 可确定同一数据集的顺序；持续新增、删除或更新下的有界页码仍不保证跨请求快照一致性，底层 PIT/JDBC 分页不是 HTTP 跨请求游标。要严格避免动态数据下翻页重复或遗漏，需要另行提供跨请求快照和游标分页。
 
 普通单表明细的时间图在分页前独立后台聚合，使用相同固定时间和筛选。自动粒度：一小时内用分钟，一天内用小时，更长范围用自然日。桶边界按业务时区对齐，首尾桶仅统计范围内的数据，返回完整自然桶的 `from/to`。全部时间、聚合/去重/连接/窗口等不支持形状返回 `histogram.status="unsupported"` 及 reason。图表执行失败或桶数过多返回 `status="error"` 及明确原因，明细仍可成功；桶数过多时缩小范围或调整粒度。非法 interval 属于请求错误。独立图表刷新可使用 `include:["histogram"]`。
 
@@ -264,33 +271,3 @@ var histogram = queries.execute(request.withHistogram(
 ```
 
 宿主裁掉第 51 条哨兵行并计算 hasNext。`consumer` / `cancellation` 分别为 `QueryRowConsumer` / `QueryCancellation`；资源在返回、取消或异常时释放。引擎响应类型仍为 `ExecutionEngine.QueryResponse`。每次请求选一个数据源；共享计划入口 `UnifiedQueryPlanner.plan(QueryExecutionRequest)` 将外部条件绑定在唯一源表 scan 之后。更多后端行为见 [embedded-query-backends.md](../docs/dev/embedded-query-backends.md)。
-
-## 真实数据源 JUnit 测试
-
-现有 [QueryApplicationLiveTest](src/test/java/org/opensearch/sql/example/QueryApplicationLiveTest.java) 可作为可选的真实数据源检查，在 IDE 或仓库根目录运行。它会连接实际的 Elasticsearch 和 ClickHouse；运行前请配置连接环境变量，并核对测试中使用的索引、表、字段及查询条件是否适合目标数据集。
-
-```bash
-./gradlew :spring-boot-example:test \
-  --tests 'org.opensearch.sql.example.QueryApplicationLiveTest'
-```
-
-具体检查内容以测试类为准。测试结果可在 IDE 测试控制台或 `spring-boot-example/build/reports/tests/test/index.html` 中查看。
-
-## 百万行导出验收（2026-10-18）
-
-通过提交任务、查询状态和下载文件三个 HTTP 接口，验证真实 ES/CH 的 SQL/PPL 百万行导出。查询投影为 `id,timestamp,message`，单并发执行。使用流式 CSV 解析器核对数据行数（排除表头）、每行列数，并检查文件字节数和 SHA-256。
-
-环境：Java 21.0.12.1，G1，`-Xms64m -Xmx128m`，一个导出 worker，每条路径先预热 1,000 行，之后只运行一次百万行投影导出。ES 可用数据 7,597,050 行，CH 可用数据 5,306,448 行；均为真实数据，没有生成或补写数据。
-
-| 路径 | 导出耗时 | CSV 数据行数 | 文件大小 MiB | 采样堆峰值 MiB | 采样 RSS 峰值 MiB | GC 后堆：前 → 后 MiB |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| es-sql | 81.623s | 1,000,000 | 305.01 | 96.96 | 304.12 | 24.57 → 25.32 |
-| es-ppl | 84.566s | 1,000,000 | 305.01 | 125.05 | 336.50 | 27.47 → 24.49 |
-| ch-sql | 3.568s | 1,000,000 | 297.36 | 79.63 | 322.89 | 26.37 → 26.40 |
-| ch-ppl | 2.982s | 1,000,000 | 296.11 | 80.54 | 308.39 | 26.41 → 26.41 |
-
-四个任务均为 `SUCCEEDED`。下载耗时分别为 0.646s、0.561s、0.511s、0.392s，下载的 `Content-Length`、实际字节数与任务状态一致。ES 两份文件均为 1,000,001 个物理文本行（含表头）；CH 为 1,000,390 和 1,000,607 个物理行，因 `message` 含换行，但严格 CSV 解析后的数据记录均恰好 1,000,000 条。查询未指定排序，CH 两次选中的记录可以不同，不能用这次耗时差宣称 SQL/PPL 的性能优劣。
-
-每个输出文件都超过 128 MiB 堆上限，而百万行完成后的活跃堆仍约 24–26 MiB；加上实际调用链 `UnifiedQueryService.stream → CalciteExecutionEngine.stream → ResultSet.next → QueryRowConsumer.row → BufferedOutputStream`，可确认本次四条投影导出路径未在 JVM 中收集全量结果。ES 一次只保留一页（最多 1,000 条），CH 使用 JDBC 迭代器，CSV 按行生成，文件缓冲区为 64 KiB。**这不保证本地排序、连接或聚合等所有查询计划也具有同样的内存界限。**
-
-峰值为 250ms 采样值，可能遗漏更短暂的峰值；JVM 堆上限始终是 128 MiB，RSS 包含非堆内存，GC 基线仅在测试前后采集。原始测量日志保存在本地构建报告目录中。应用已正常停止，服务器导出文件剩余 0 个；下载验证文件也已删除。

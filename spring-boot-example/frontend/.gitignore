@@ -7,10 +7,8 @@ dist/
 !.env.example
 !.env.sample
 
-# Package manager logs and browser test output
+# Package manager logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-playwright-report/
-test-results/

@@ -42,8 +42,7 @@ public final class PPLGrammarBundleExporter {
     }
 
     Files.createDirectories(parent);
-    Path temporary =
-        Files.createTempFile(parent, "." + output.getFileName().toString() + ".", ".tmp");
+    Path temporary = Files.createTempFile(parent, "." + output.getFileName() + ".", ".tmp");
     boolean moved = false;
     try {
       Files.writeString(

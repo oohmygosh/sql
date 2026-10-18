@@ -63,8 +63,4 @@ http-client.env.json
 .clinerules
 memory-bank
 
-# Local live-query audit tooling and reports
-/spring-boot-example/reports/
-/spring-boot-example/scripts/live_query_*.py
-/spring-boot-example/LIVE_QUERY_AUDIT.md
-/spring-boot-example/src/test/java/org/opensearch/sql/example/QueryApplicationAuditLiveTest.java
+T*.md

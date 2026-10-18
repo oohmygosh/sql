@@ -5,8 +5,8 @@ import { createPplCompletion } from './ppl-completion.js';
 export function attachPplAssist({ input, list, status, getContext, onChange }) {
   let enginePromise, timer, version = 0, composing = false, disposed = false;
   let candidates = [], selected = 0, dismissedKey;
-  const controller = new AbortController();
-  const kindLabels = { keyword: '语法', function: '函数', table: '表', field: '源字段' };
+  const grammarRequest = new AbortController();
+  const kindLabels = { keyword: '语法', function: '函数', table: '表', field: '源字段', operator: '运算符' };
   const snapshot = () => {
     const context = getContext();
     return { ...context, text: input.value, caret: input.selectionStart, end: input.selectionEnd };
@@ -19,11 +19,12 @@ export function attachPplAssist({ input, list, status, getContext, onChange }) {
     input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant');
   }
   function reset() {
-    version++; clearTimeout(timer); clearList(); message(''); dismissedKey = keyOf(snapshot());
+    version++; clearTimeout(timer);
+    clearList(); message(''); dismissedKey = keyOf(snapshot());
   }
   function loadEngine() {
     if (!enginePromise) {
-      enginePromise = request('ui/ppl/grammar', { signal: controller.signal })
+      enginePromise = request('ui/ppl/grammar', { signal: grammarRequest.signal })
         .then(createPplCompletion).catch(error => {
           enginePromise = undefined;
           throw error;
@@ -36,12 +37,6 @@ export function attachPplAssist({ input, list, status, getContext, onChange }) {
     const ppl = getContext().mode === 'ppl';
     input.setAttribute('aria-autocomplete', ppl ? 'list' : 'none');
     input.placeholder = ppl ? '输入 PPL 查询 · Ctrl+Space 补全' : '输入 SQL 查询';
-    if (ppl && !disposed) {
-      const current = version;
-      loadEngine().catch(() => {
-        if (!disposed && current === version && getContext().mode === 'ppl') message('PPL 提示暂不可用，按 Ctrl+Space 重试。');
-      });
-    }
   }
   function select(index) {
     selected = index;
@@ -93,6 +88,7 @@ export function attachPplAssist({ input, list, status, getContext, onChange }) {
     const item = candidates[index]; if (!item) return;
     input.setRangeText(item.insertText, item.from, item.to, 'end');
     reset(); input.focus(); onChange();
+    dismissedKey = undefined; schedule();
   }
   function keydown(event) {
     if (getContext().mode !== 'ppl' || composing || event.isComposing) return;
@@ -128,6 +124,6 @@ export function attachPplAssist({ input, list, status, getContext, onChange }) {
   contextChanged();
   return {
     reset, contextChanged,
-    dispose() { reset(); disposed = true; controller.abort(); events.abort(); },
+    dispose() { reset(); disposed = true; grammarRequest.abort(); events.abort(); },
   };
 }

@@ -2,7 +2,9 @@ import './styles.css';
 import { icon } from './icons.js';
 import { apiUrl, request, normalizeResponse, jsonText } from './api.js';
 import { displayValue, queryTemplate } from './results.js';
-import { copyContext, freezeContext, searchBody, parseFilterValue, validateAbsoluteTimeRange } from './search-context.js';
+import { getLogLayout, extractedEntries } from './log-results.js';
+import { copyContext, freezeContext, searchBody, parseFilterValue } from './search-context.js';
+import { timePresets, toDateTimeInput, validatePickerTimeRange } from './time-range.js';
 import { attachPplAssist } from './ppl-assist.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -11,7 +13,9 @@ const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&
 const historyKey = 'lens.search.history.v3';
 const exportKey = 'lens.search.export.v2';
 const state = {
-  sources: [], source: '', mode: 'sql', view: 'table', schema: [], rows: [], filters: [],
+  sources: [], source: '', mode: 'ppl', view: 'table', schema: [], rows: [], filters: [],
+  timeSettings: { field: 'timestamp', timeZone: 'Asia/Shanghai' }, customTimeRange: null,
+  expandedRows: new Set(),
   chart: null, chartVisible: true, page: 1, pageSize: 20, hasNext: false, dirty: true,
   history: readHistory(), drafts: new Map(), lastRequest: null, detail: null, maxPageSize: 1000,
   requestId: 0, controller: null, exportTask: null, exportTimer: null, exportSubmitting: false,
@@ -33,6 +37,7 @@ function setBusy(busy) {
 }
 function invalidateRequest() { state.requestId++; state.controller?.abort(); state.controller = null; clearTimeout(fitTimer); setBusy(false); }
 function clearResults() {
+  state.expandedRows.clear();
   state.schema = []; state.rows = []; state.lastRequest = null; state.chart = null; state.page = 1; state.hasNext = false; state.dirty = true;
   $('#query-warning').hidden = true; $('#elapsed').textContent = '等待查询'; render();
 }
@@ -46,7 +51,7 @@ function setMode(mode) {
   saveDraft(); invalidateRequest(); state.mode = mode;
   $('#query-input').value = state.drafts.get(draftKey()) ?? (sourceConfig().table ? queryTemplate(mode, sourceConfig().table) : '');
   $$('[data-mode]').forEach(button => { const selected = button.dataset.mode === mode; button.classList.toggle('selected', selected); button.setAttribute('aria-selected', selected); });
-  $('#query-input').setAttribute('aria-label', `${mode.toUpperCase()} 查询`); pplAssist.contextChanged(); clearResults(); queryError('');
+  $('#query-input').setAttribute('aria-label', `${mode.toUpperCase()} 查询`); $('#query-input').placeholder = `输入 ${mode.toUpperCase()} 查询`; pplAssist.contextChanged(); clearResults(); queryError('');
 }
 function setSource(source) {
   const config = state.sources.find(item => item.name === source); if (!config) return;
@@ -54,13 +59,14 @@ function setSource(source) {
   $('#dataset-select').value = source;
   $$('[data-source]').forEach(button => button.classList.toggle('selected', button.dataset.source === source));
   $('#query-input').value = state.drafts.get(draftKey()) ?? (config.table ? queryTemplate(state.mode, config.table) : '');
-  $('#time-field').value = config.timeField || 'timestamp'; $('#time-zone').value = config.timeZone || 'Asia/Shanghai'; $('#time-select').value = 'all'; updateAbsoluteControls();
+  state.timeSettings = { field: config.timeField || 'timestamp', timeZone: config.timeZone || 'Asia/Shanghai' };
+  state.customTimeRange = null; $('#time-from').value = ''; $('#time-to').value = ''; $('#time-select').value = '1d'; updateAbsoluteControls();
   pplAssist.contextChanged(); clearResults(); queryError(''); setBusy(false);
 }
 function prepareTemplate(preset) {
   try {
     const mode = preset === 'distribution' ? 'ppl' : state.mode;
-    const query = queryTemplate(mode, sourceConfig().table || '', preset, $('#time-field').value.trim() || 'timestamp');
+    const query = queryTemplate(mode, sourceConfig().table || '', preset, state.timeSettings.field);
     if (mode !== state.mode) setMode(mode);
     $('#query-input').value = query; pplAssist.reset(); saveDraft(); conditionsChanged(); queryError(''); $('#query-input').focus(); toast('已填入查询，点击「执行查询」运行。');
   } catch (error) { queryError(error.message); }
@@ -69,27 +75,46 @@ function readContext() {
   const query = $('#query-input').value.trim(); if (!query) throw new Error('请输入 SQL 或 PPL 查询。');
   if (!state.source) throw new Error('尚未加载数据源，请重新加载页面。');
   const context = { source: state.source, language: state.mode.toUpperCase(), query, filters: copyContext(state.filters) };
-  const range = $('#time-select').value;
-  if (range !== 'all') {
-    const field = $('#time-field').value.trim(), timeZone = $('#time-zone').value.trim();
-    if (!field || !timeZone) throw new Error('请选择源时间字段并填写业务时区。');
-    let from = range === 'custom' ? $('#time-from').value.trim() : `now-${range}`;
-    let to = range === 'custom' ? $('#time-to').value.trim() : 'now';
-    if (range === 'custom') {
-      validateAbsoluteTimeRange(from, to);
-    }
-    context.timeRange = { field, from, to, timeZone };
+  let range = timePresets[$('#time-select').value];
+  if ($('#time-select').value === 'custom') {
+    const from = $('#time-from').value, to = $('#time-to').value;
+    // Keep restored ISO endpoints exact until the user edits the picker.
+    const saved = state.customTimeRange;
+    range = saved && saved.fromInput === from && saved.toInput === to ? saved.range : validatePickerTimeRange(from, to);
   }
+  context.timeRange = { ...state.timeSettings, ...range };
   return context;
 }
 function applyTimeRange(range) {
-  if (!range) { $('#time-select').value = 'all'; updateAbsoluteControls(); return; }
-  $('#time-field').value = range.field; $('#time-zone').value = range.timeZone;
-  const relative = /^now-(15m|1h|1d|7d)$/.exec(range.from);
-  $('#time-select').value = relative && range.to === 'now' ? relative[1] : 'custom';
-  $('#time-from').value = range.from; $('#time-to').value = range.to; updateAbsoluteControls();
+  if (!range) { $('#time-select').value = '1d'; updateAbsoluteControls(); return; }
+  state.timeSettings = { field: range.field || state.timeSettings.field, timeZone: range.timeZone || state.timeSettings.timeZone };
+  const preset = Object.keys(timePresets).find(key => timePresets[key].from === range.from && timePresets[key].to === range.to);
+  if (preset || (range.from === 'now-1d' && range.to === 'now')) {
+    $('#time-select').value = preset || '1d';
+  } else if (range.from.startsWith('now')) {
+    // Older histories may contain the removed 15-minute and one-hour presets.
+    const legacy = /^now-(15m|1h)$/.exec(range.from);
+    $('#time-select').value = legacy && range.to === 'now' ? 'custom' : '1d';
+    if (legacy && range.to === 'now') {
+      const now = Date.now(); setCustomTimeRange({ from: new Date(now - (legacy[1] === '15m' ? 900000 : 3600000)).toISOString(), to: new Date(now).toISOString() });
+    }
+  } else {
+    $('#time-select').value = 'custom'; setCustomTimeRange(range);
+  }
+  updateAbsoluteControls();
 }
-function updateAbsoluteControls() { $('#absolute-time-controls').hidden = $('#time-select').value !== 'custom'; }
+function setCustomTimeRange(range) {
+  const display = value => /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? toDateTimeInput(value, state.timeSettings.timeZone) : value;
+  $('#time-from').value = display(range.from); $('#time-to').value = display(range.to);
+  state.customTimeRange = { range: copyContext(range), fromInput: $('#time-from').value, toInput: $('#time-to').value };
+}
+function updateAbsoluteControls() {
+  const custom = $('#time-select').value === 'custom'; $('#absolute-time-controls').hidden = !custom;
+  if (custom && !$('#time-from').value && !$('#time-to').value) {
+    const now = Date.now();
+    setCustomTimeRange(state.lastRequest?.timeRange || { from: new Date(now - 86400000).toISOString(), to: new Date(now).toISOString() });
+  }
+}
 async function runSearch({ number = 1, continuation = false } = {}) {
   pplAssist.reset();
   let context;
@@ -105,6 +130,7 @@ async function runSearch({ number = 1, continuation = false } = {}) {
     if (id !== state.requestId) return;
     if (!result.rows) throw new Error(result.errors?.rows?.message || result.errors?.rows || '明细查询失败，服务端未返回 rows。');
     const frozen = continuation ? context : freezeContext(context, result.resolvedTimeRange);
+    state.expandedRows.clear();
     state.schema = result.rows.schema; state.rows = result.rows.rows; state.lastRequest = frozen;
     state.page = result.page.number; state.pageSize = result.page.size; state.hasNext = result.page.hasNext; state.dirty = false;
     if (!continuation) state.chart = result.histogram || { status: 'error', reason: '服务端未返回时间分布。' };
@@ -127,7 +153,7 @@ function renderFilters() {
   $('#filter-chips').innerHTML = state.filters.map((filter, index) => `<span class="filter-chip"><span>${escapeHtml(filter.field)}</span><span>${escapeHtml(filter.operator)}</span><b>${escapeHtml(displayValue(filter.value))}</b><button data-remove-filter="${index}" aria-label="移除筛选 ${index + 1}">${icon('x')}</button></span>`).join('');
   $('[data-action="filter"]').disabled = !state.source; $('[data-action="export"]').disabled = !state.lastRequest;
 }
-function formatTime(value, timeZone = state.chart?.timeZone || $('#time-zone').value || 'Asia/Shanghai') {
+function formatTime(value, timeZone = state.chart?.timeZone || state.timeSettings.timeZone) {
   try { return new Date(value).toLocaleString('zh-CN', { timeZone, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }); } catch { return String(value); }
 }
 function renderChart() {
@@ -147,8 +173,15 @@ function renderRows() {
   const rows = state.rows, empty = !rows.length; $('#tab-count').textContent = rows.length.toLocaleString();
   $('#empty-state').hidden = !empty; $('#empty-state h3').textContent = state.lastRequest ? '暂时没有匹配的数据' : '准备探索数据';
   $('#table-view').hidden = empty || state.view !== 'table'; $('#json-view').hidden = state.view !== 'json'; if (state.view === 'json') $('#empty-state').hidden = true;
-  $('thead').innerHTML = `<tr><th class="expand-col"><span class="sr-only">详情</span></th>${state.schema.map(column => `<th title="${escapeHtml(column.type)}">${escapeHtml(column.name)}<small>${escapeHtml(column.type)}</small></th>`).join('')}</tr>`;
-  $('#results-rows').innerHTML = rows.map(row => `<tr class="result-row" tabindex="0" data-row-id="${row.index}" aria-label="查看第 ${(state.page - 1) * state.pageSize + row.index + 1} 条记录"><td>${icon('chevron-right')}</td>${row.values.map((value, index) => { const text = displayValue(value); const isLevel = ['level', 'severity', 'log.level'].includes(state.schema[index].name.toLowerCase()) && ['INFO', 'WARN', 'ERROR'].includes(text); return `<td title="${escapeHtml(text)}">${isLevel ? `<span class="level-badge ${text}">${text}</span>` : `<span class="cell-value${value === null ? ' null-value' : ''}">${escapeHtml(text)}</span>`}</td>`; }).join('')}</tr>`).join('');
+  const layout = getLogLayout(state.schema);
+  $('#table-view table').classList.toggle('log-table', !!layout);
+  if (layout) {
+    $('thead').innerHTML = '<tr><th class="expand-col"><span class="sr-only">展开日志</span></th><th class="log-time-heading">时间</th><th>日志内容<span class="log-column-hint">点击行展开 extracted</span></th></tr>';
+    $('#results-rows').innerHTML = rows.map(row => renderLogRow(row, layout)).join('');
+  } else {
+    $('thead').innerHTML = `<tr><th class="expand-col"><span class="sr-only">详情</span></th>${state.schema.map(column => `<th title="${escapeHtml(column.type)}">${escapeHtml(column.name)}<small>${escapeHtml(column.type)}</small></th>`).join('')}</tr>`;
+    $('#results-rows').innerHTML = rows.map(row => `<tr class="result-row" tabindex="0" data-row-id="${row.index}" aria-label="查看第 ${(state.page - 1) * state.pageSize + row.index + 1} 条记录"><td>${icon('chevron-right')}</td>${row.values.map((value, index) => { const text = displayValue(value); const isLevel = ['level', 'severity', 'log.level'].includes(state.schema[index].name.toLowerCase()) && ['INFO', 'WARN', 'ERROR'].includes(text); return `<td title="${escapeHtml(text)}">${isLevel ? `<span class="level-badge ${text}">${text}</span>` : `<span class="cell-value${value === null ? ' null-value' : ''}">${escapeHtml(text)}</span>`}</td>`; }).join('')}</tr>`).join('');
+  }
   $('#json-content').textContent = jsonText({ schema: state.schema, datarows: rows.map(row => row.values) }, null, 2);
   const first = empty ? 0 : (state.page - 1) * state.pageSize + 1;
   $('#page-summary').textContent = state.dirty && state.lastRequest ? '条件已修改，请执行查询' : state.lastRequest ? `${first}–${empty ? 0 : first + rows.length - 1} 行${state.hasNext ? ' · 还有下一页' : ' · 已到末页'}` : '等待查询';
@@ -156,7 +189,37 @@ function renderRows() {
   $('#prev-page').disabled = !!state.controller || state.dirty || state.page <= 1; $('#next-page').disabled = !!state.controller || state.dirty || !state.hasNext;
   requestAnimationFrame(fitPageSize);
 }
+function renderLogRow(row, layout) {
+  const extracted = row.values[layout.extractedIndex], entries = extractedEntries(extracted);
+  const parsed = Object.fromEntries(entries);
+  const present = value => value !== null && value !== undefined && value !== '';
+  const pick = (index, ...keys) => present(row.values[index]) ? row.values[index] : keys.map(key => parsed[key]).find(present);
+  const message = pick(layout.bodyIndex, 'message', 'msg', 'content', 'log');
+  const level = String(pick(layout.levelIndex, 'level', 'severity') || '').toUpperCase();
+  const source = pick(layout.sourceIndex, 'service', 'service_name', 'source');
+  const timestamp = row.values[layout.timeIndex];
+  const time = present(timestamp) ? displayValue(timestamp) : '';
+  // The service may return an unzoned timestamp; display it without browser timezone conversion.
+  const parts = /^(\d{4}-\d{2}-\d{2})[T ](.+)$/.exec(time);
+  const expanded = state.expandedRows.has(row.index), id = `extracted-row-${row.index}`;
+  const badge = level && level !== 'UNKNOWN' ? `<span class="level-badge ${['INFO', 'WARN', 'ERROR'].includes(level) ? level : 'log-level-other'}">${escapeHtml(level)}</span>` : '';
+  const content = present(message) ? displayValue(message) : entries.length ? entries.slice(0, 3).map(([key, value]) => `${key}=${displayValue(value)}`).join('  ·  ') : '此记录没有日志正文';
+  const number = (state.page - 1) * state.pageSize + row.index + 1;
+  return `<tr class="result-row log-row${expanded ? ' expanded' : ''}" tabindex="0" data-row-id="${row.index}" data-log-row aria-expanded="${expanded}" aria-controls="${id}" aria-label="${expanded ? '收起' : '展开'}第 ${number} 条日志的 extracted"><td><button type="button" class="log-expand" data-expand-row="${row.index}" aria-expanded="${expanded}" aria-controls="${id}" aria-label="${expanded ? '收起' : '展开'} extracted，第 ${number} 条日志">${icon('chevron-right')}</button></td><td class="log-time" title="${escapeHtml(time)}">${parts ? `<span>${escapeHtml(parts[1])}</span><strong>${escapeHtml(parts[2])}</strong>` : escapeHtml(time || '—')}</td><td class="log-content"><div class="log-message${present(message) || entries.length ? '' : ' log-message-empty'}">${escapeHtml(content)}</div><div class="log-context">${badge}${present(source) ? `<span class="log-source" title="${escapeHtml(displayValue(source))}">${escapeHtml(displayValue(source))}</span>` : ''}<span class="log-extracted-count">${icon('code')}extracted<span>${entries.length}</span></span></div></td></tr>${expanded ? renderExtractedRow(row, entries, id, extracted) : ''}`;
+}
+function renderExtractedRow(row, entries, id, extracted) {
+  const fields = entries.map(([key, value]) => `<div class="extracted-field"><dt>${escapeHtml(key)}</dt><dd${value === null ? ' class="null-value"' : ''}>${escapeHtml(typeof value === 'object' && value !== null ? jsonText(value, null, 2) : displayValue(value))}</dd></div>`).join('');
+  const body = entries.length ? `<dl class="extracted-fields">${fields}</dl>` : extracted !== null && extracted !== undefined && jsonText(extracted) !== '{}' ? `<pre class="extracted-raw">${escapeHtml(jsonText(extracted, null, 2))}</pre>` : '<p class="extracted-empty">暂无提取字段</p>';
+  return `<tr class="log-expanded-row" data-expanded-row="${row.index}" id="${id}"><td colspan="3"><section class="extracted-panel" aria-label="第 ${row.index + 1} 条日志的 extracted"><div class="extracted-heading"><span>${icon('code')}<strong>extracted</strong><span class="extracted-field-count">${entries.length} 个解析字段</span></span><button type="button" class="text-button" data-record-detail="${row.index}">全部字段${icon('arrow-up-right')}</button></div>${body}</section></td></tr>`;
+}
+function toggleLogRow(index) {
+  if (state.expandedRows.has(index)) state.expandedRows.delete(index); else state.expandedRows.add(index);
+  // Expansion changes reading space, not the page size or search conditions.
+  clearTimeout(fitTimer); renderRows();
+  $(`[data-expand-row="${index}"]`)?.focus({ preventScroll: true });
+}
 function fitPageSize() {
+  if (state.expandedRows.size) { clearTimeout(fitTimer); return; }
   const row = $('#results-rows tr'), viewport = $('#table-view');
   if ($('#page-size').value !== 'auto' || viewport.hidden || !row) return;
   const height = row.getBoundingClientRect().height; if (!height) return;
@@ -170,7 +233,11 @@ function renderFields() {
   const term = $('#field-search').value.toLowerCase(), fields = sourceFields();
   $('#field-count').textContent = `${fields.length} / ${state.schema.length}`;
   const sources = fields.map((field, index) => ({ field, index })).filter(({ field }) => field.name.toLowerCase().includes(term));
-  $('#field-list').innerHTML = '<p class="field-group-label">源字段 · 可筛选</p>' + (sources.map(({ field, index }) => `<button class="field-item" data-source-field="${index}" title="${escapeHtml(field.type)}"><span class="field-type">Aa</span><span class="field-name">${escapeHtml(field.name)}</span><span>${icon('plus')}</span></button>`).join('') || '<p class="modal-note">未配置源字段，可显式填写字段名。</p>') + '<p class="field-group-label">结果列 / 别名 · 仅展示</p>' + state.schema.filter(field => field.name.toLowerCase().includes(term)).map(field => `<div class="field-item result-field" title="${escapeHtml(field.type)}"><span class="field-type">=</span><span class="field-name">${escapeHtml(field.name)}</span></div>`).join('');
+  const layout = getLogLayout(state.schema);
+  const resultField = field => `<div class="field-item result-field" title="${escapeHtml(field.type)}"><span class="field-type">=</span><span class="field-name">${escapeHtml(field.name)}</span></div>`;
+  const visibleFields = state.schema.filter(field => field.name.toLowerCase().includes(term));
+  const metadata = layout ? visibleFields.filter(field => layout.metadataIndexes.includes(state.schema.indexOf(field))) : [];
+  $('#field-list').innerHTML = '<p class="field-group-label">源字段 · 可筛选</p>' + (sources.map(({ field, index }) => `<button class="field-item" data-source-field="${index}" title="${escapeHtml(field.type)}"><span class="field-type">Aa</span><span class="field-name">${escapeHtml(field.name)}</span><span>${icon('plus')}</span></button>`).join('') || '<p class="modal-note">未配置源字段，可显式填写字段名。</p>') + `<p class="field-group-label">${layout ? '日志字段' : '结果列 / 别名 · 仅展示'}</p>` + visibleFields.filter(field => !metadata.includes(field)).map(resultField).join('') + (metadata.length ? `<details class="metadata-field-list"${term ? ' open' : ''}><summary>采集元数据 <span>${metadata.length}</span></summary>${metadata.map(resultField).join('')}</details>` : '');
 }
 function openModal(title, content) { $('#modal-title').textContent = title; $('#modal-content').innerHTML = content; fillIcons($('#modal')); if (!$('#modal').open) $('#modal').showModal(); }
 function openFilter(index = -1) {
@@ -277,7 +344,7 @@ $('#query-input').oninput = () => { saveDraft(); conditionsChanged(); };
 $('#cancel-query').onclick = () => { invalidateRequest(); $('#elapsed').textContent = '已停止等待'; toast('已停止接收结果；服务端查询可能仍在执行。'); };
 $('#dataset-select').onchange = event => setSource(event.target.value);
 $('#time-select').onchange = () => { updateAbsoluteControls(); conditionsChanged(); if ($('#time-select').value !== 'custom' && $('#query-input').value.trim()) runSearch(); };
-for (const id of ['time-field', 'time-zone', 'time-from', 'time-to']) $(`#${id}`).oninput = conditionsChanged;
+for (const id of ['time-from', 'time-to']) $(`#${id}`).oninput = () => { state.customTimeRange = null; conditionsChanged(); };
 $('#field-search').oninput = renderFields;
 $('#page-size').onchange = event => { clearTimeout(fitTimer); if (event.target.value === 'auto') { fitPageSize(); return; } const size = Number(event.target.value); if (size === state.pageSize) return; state.pageSize = size; state.page = 1; if (state.lastRequest && !state.dirty) runSearch({ continuation: true }); else renderRows(); };
 $('#prev-page').onclick = () => runSearch({ number: state.page - 1, continuation: true });
@@ -286,13 +353,15 @@ $('#export-status-button').onclick = showExportStatus;
 document.addEventListener('keydown', event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); $$('dialog[open]').forEach(dialog => dialog.close()); $('#query-input').focus(); $('#query-input').select(); }
   if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && event.target === $('#query-input')) { event.preventDefault(); runSearch(); }
-  if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-row-id]')) { event.preventDefault(); detail(Number(event.target.dataset.rowId)); }
+  if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-row-id]')) { event.preventDefault(); if (event.target.hasAttribute('data-log-row')) toggleLogRow(Number(event.target.dataset.rowId)); else detail(Number(event.target.dataset.rowId)); }
   if (event.key === 'Escape') { setHistoryOpen(false); $('.sidebar').classList.remove('open'); }
 });
 document.addEventListener('click', async event => {
   if (!event.target.closest('.sidebar') && !event.target.closest('[data-action="menu"]')) $('.sidebar').classList.remove('open');
   if (!event.target.closest('#query-history-panel') && !event.target.closest('[data-action="history"]')) setHistoryOpen(false);
-  const row = event.target.closest('[data-row-id]'); if (row) { detail(Number(row.dataset.rowId)); return; }
+  const expand = event.target.closest('[data-expand-row]'); if (expand) { toggleLogRow(Number(expand.dataset.expandRow)); return; }
+  const recordDetail = event.target.closest('[data-record-detail]'); if (recordDetail) { detail(Number(recordDetail.dataset.recordDetail)); return; }
+  const row = event.target.closest('[data-row-id]'); if (row) { if (row.hasAttribute('data-log-row')) toggleLogRow(Number(row.dataset.rowId)); else detail(Number(row.dataset.rowId)); return; }
   const button = event.target.closest('button'); if (!button || button.disabled) return; const data = button.dataset;
   if (data.mode) { setMode(data.mode); return; }
   if (data.source) { setSource(data.source); $('.sidebar').classList.remove('open'); return; }

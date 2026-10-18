@@ -31,8 +31,8 @@
             <form id="search-form" class="query-card">
               <div class="query-toolbar">
                 <div class="segmented" role="tablist" aria-label="查询语言">
-                  <button type="button" role="tab" aria-selected="true" data-mode="sql" class="selected">SQL</button>
-                  <button type="button" role="tab" aria-selected="false" data-mode="ppl">PPL</button>
+                  <button type="button" role="tab" aria-selected="false" data-mode="sql">SQL</button>
+                  <button type="button" role="tab" aria-selected="true" data-mode="ppl" class="selected">PPL</button>
                 </div>
                 <span class="control-divider"></span>
                 <div class="query-controls">
@@ -42,15 +42,13 @@
                 <button type="button" class="history-trigger" data-action="history" aria-label="查询历史" aria-expanded="false" aria-controls="query-history-panel"><span data-icon="history"></span><span>查询历史</span><span data-icon="chevron-down"></span></button>
               </div>
               <div class="query-editor-row">
-                <div class="query-input-wrap"><span class="editor-line-number" aria-hidden="true">1</span><label class="sr-only" for="query-input">查询语句</label><textarea id="query-input" class="code-input" rows="2" spellcheck="false" aria-label="SQL 查询" aria-describedby="ppl-assist-status" placeholder="输入 SQL 查询"></textarea><div id="ppl-completions" class="ppl-completions" role="listbox" aria-label="PPL 补全建议" hidden></div></div>
+                <div class="query-input-wrap"><span class="editor-line-number" aria-hidden="true">1</span><label class="sr-only" for="query-input">查询语句</label><textarea id="query-input" class="code-input" rows="2" spellcheck="false" aria-label="PPL 查询" aria-describedby="ppl-assist-status" placeholder="输入 PPL 查询"></textarea><div id="ppl-completions" class="ppl-completions" role="listbox" aria-label="PPL 补全建议" hidden></div></div>
                 <button type="submit" class="button primary" id="search-button" disabled><span data-icon="play"></span><span>执行查询</span></button>
               </div>
               <p id="ppl-assist-status" class="ppl-assist-status" role="status" aria-live="polite" hidden></p>
               <div class="search-time-controls">
-                <label>时间字段<input id="time-field" aria-label="源时间字段" value="timestamp" spellcheck="false" /></label>
-                <label>时间范围<select id="time-select" aria-label="查询时间范围"><option value="all">全部时间</option><option value="15m">最近 15 分钟</option><option value="1h">最近 1 小时</option><option value="1d">最近 24 小时</option><option value="7d">最近 7 天</option><option value="custom">绝对时间</option></select></label>
-                <label>时区<input id="time-zone" aria-label="查询时区" value="Asia/Shanghai" spellcheck="false" /></label>
-                <span id="absolute-time-controls" hidden><label>从<input id="time-from" aria-label="开始时间" placeholder="2026-10-17T00:00:00+08:00" /></label><label>至<input id="time-to" aria-label="结束时间" placeholder="2026-10-18T00:00:00+08:00" /></label></span>
+                <label>时间范围<select id="time-select" aria-label="查询时间范围"><option value="yesterday">昨天</option><option value="today">今天</option><option value="1d" selected>最近 24 小时</option><option value="7d">最近 7 天</option><option value="custom">自定义</option></select></label>
+                <span id="absolute-time-controls" hidden><label>开始时间<input type="datetime-local" step="0.001" id="time-from" aria-label="开始时间" /></label><span class="time-range-separator" aria-hidden="true">至</span><label>结束时间<input type="datetime-local" step="0.001" id="time-to" aria-label="结束时间" /></label></span>
               </div><div class="query-bottom">
                 <div class="quick-queries" aria-label="快捷查询"><span class="quick-label"><span data-icon="bolt"></span>快捷查询</span><button type="button" data-preset="sample">查询明细</button><button type="button" data-preset="count">记录总数</button><button type="button" data-preset="distribution">时间分布</button></div>
                 <div class="editor-actions"><span class="run-hint"><kbd>⌘ ↵</kbd> 执行</span><button type="button" class="icon-button" data-action="clear-query" aria-label="清空查询"><span data-icon="eraser"></span></button></div>
