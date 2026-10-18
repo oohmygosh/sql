@@ -19,6 +19,7 @@ const icons = {
   return: '<path d="M20 5v7a3 3 0 0 1-3 3H4m4-4-4 4 4 4"/>',
   filter: '<path d="M3 5h18l-7 8v6l-4 2v-8z"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  minus: '<path d="M5 12h14"/>',
   x: '<path d="m6 6 12 12M6 18 18 6"/>',
   'check-circle': '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
   list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.1M3 12h.1M3 18h.1"/>',

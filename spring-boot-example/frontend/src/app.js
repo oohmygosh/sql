@@ -3,6 +3,7 @@ import { icon } from './icons.js';
 import { apiUrl, request, normalizeResponse, jsonText } from './api.js';
 import { displayValue, queryTemplate } from './results.js';
 import { getLogLayout, extractedEntries } from './log-results.js';
+import { isDirectSourceQuery, quickValueFilter, fieldValues, visibleColumnIndexes, toggleColumn } from './fields.js';
 import { copyContext, freezeContext, searchBody, parseFilterValue } from './search-context.js';
 import { timePresets, toDateTimeInput, validatePickerTimeRange } from './time-range.js';
 import { attachPplAssist } from './ppl-assist.js';
@@ -15,7 +16,7 @@ const exportKey = 'lens.search.export.v2';
 const state = {
   sources: [], source: '', mode: 'ppl', view: 'table', schema: [], rows: [], filters: [],
   timeSettings: { field: 'timestamp', timeZone: 'Asia/Shanghai' }, customTimeRange: null,
-  expandedRows: new Set(),
+  expandedRows: new Set(), visibleColumns: null, columnSchema: null, activeField: null,
   chart: null, chartVisible: true, page: 1, pageSize: 20, hasNext: false, dirty: true,
   history: readHistory(), drafts: new Map(), lastRequest: null, detail: null, maxPageSize: 1000,
   requestId: 0, controller: null, exportTask: null, exportTimer: null, exportSubmitting: false,
@@ -34,28 +35,34 @@ function setBusy(busy) {
   $('#search-button').disabled = busy || !state.source; $('#page-size').disabled = busy;
   $('#search-button').innerHTML = icon('play') + `<span>${busy ? '查询中' : '执行查询'}</span>`; $('#cancel-query').hidden = !busy;
   $('#prev-page').disabled = busy || state.dirty || state.page <= 1; $('#next-page').disabled = busy || state.dirty || !state.hasNext;
+  renderFields();
 }
 function invalidateRequest() { state.requestId++; state.controller?.abort(); state.controller = null; clearTimeout(fitTimer); setBusy(false); }
 function clearResults() {
-  state.expandedRows.clear();
+  state.expandedRows.clear(); state.activeField = null;
   state.schema = []; state.rows = []; state.lastRequest = null; state.chart = null; state.page = 1; state.hasNext = false; state.dirty = true;
   $('#query-warning').hidden = true; $('#elapsed').textContent = '等待查询'; render();
 }
-function conditionsChanged() { invalidateRequest(); state.page = 1; state.dirty = true; renderFilters(); renderRows(); }
+function conditionsChanged() { invalidateRequest(); state.page = 1; state.dirty = true; renderFilters(); renderRows(); renderFields(); }
 function sourceConfig() { return state.sources.find(item => item.name === state.source) || {}; }
-function sourceFields() { return Array.isArray(sourceConfig().sourceFields) ? sourceConfig().sourceFields.filter(field => field && typeof field.name === 'string' && typeof field.type === 'string') : []; }
+function sourceFields() {
+  const configured = Array.isArray(sourceConfig().sourceFields) ? sourceConfig().sourceFields.filter(field => field && typeof field.name === 'string' && typeof field.type === 'string') : [];
+  const inferred = canUseResultFields() ? state.schema : [];
+  return [...configured, ...inferred.filter(field => !configured.some(item => item.name === field.name))];
+}
+function canUseResultFields() { return !!state.lastRequest && !state.dirty && isDirectSourceQuery(state.lastRequest.query, state.lastRequest.language); }
 function draftKey() { return `${state.source}:${state.mode}`; }
 function saveDraft() { state.drafts.set(draftKey(), $('#query-input').value); }
 function setMode(mode) {
   if (mode === state.mode) return;
-  saveDraft(); invalidateRequest(); state.mode = mode;
+  saveDraft(); invalidateRequest(); state.mode = mode; state.visibleColumns = null; state.columnSchema = null; $('#field-search').value = '';
   $('#query-input').value = state.drafts.get(draftKey()) ?? (sourceConfig().table ? queryTemplate(mode, sourceConfig().table) : '');
   $$('[data-mode]').forEach(button => { const selected = button.dataset.mode === mode; button.classList.toggle('selected', selected); button.setAttribute('aria-selected', selected); });
   $('#query-input').setAttribute('aria-label', `${mode.toUpperCase()} 查询`); $('#query-input').placeholder = `输入 ${mode.toUpperCase()} 查询`; pplAssist.contextChanged(); clearResults(); queryError('');
 }
 function setSource(source) {
   const config = state.sources.find(item => item.name === source); if (!config) return;
-  saveDraft(); invalidateRequest(); state.source = source; state.filters = [];
+  saveDraft(); invalidateRequest(); state.source = source; state.filters = []; state.visibleColumns = null; state.columnSchema = null; $('#field-search').value = '';
   $('#dataset-select').value = source;
   $$('[data-source]').forEach(button => button.classList.toggle('selected', button.dataset.source === source));
   $('#query-input').value = state.drafts.get(draftKey()) ?? (config.table ? queryTemplate(state.mode, config.table) : '');
@@ -130,6 +137,8 @@ async function runSearch({ number = 1, continuation = false } = {}) {
     if (id !== state.requestId) return;
     if (!result.rows) throw new Error(result.errors?.rows?.message || result.errors?.rows || '明细查询失败，服务端未返回 rows。');
     const frozen = continuation ? context : freezeContext(context, result.resolvedTimeRange);
+    const signature = JSON.stringify([context.source, context.language, result.rows.schema]);
+    if (state.columnSchema !== signature) { state.visibleColumns = null; state.columnSchema = signature; }
     state.expandedRows.clear();
     state.schema = result.rows.schema; state.rows = result.rows.rows; state.lastRequest = frozen;
     state.page = result.page.number; state.pageSize = result.page.size; state.hasNext = result.page.hasNext; state.dirty = false;
@@ -169,25 +178,27 @@ function renderChart() {
   const labels = buckets.length ? [buckets[0].from, ...[.25, .5, .75].map(fraction => buckets[Math.min(buckets.length - 1, Math.floor(buckets.length * fraction))].from), buckets.at(-1).to] : [];
   $('#chart-axis').innerHTML = labels.map(value => `<span>${escapeHtml(formatTime(value))}</span>`).join('');
 }
-function renderRows() {
+function renderRows({ fit = true } = {}) {
   const rows = state.rows, empty = !rows.length; $('#tab-count').textContent = rows.length.toLocaleString();
   $('#empty-state').hidden = !empty; $('#empty-state h3').textContent = state.lastRequest ? '暂时没有匹配的数据' : '准备探索数据';
   $('#table-view').hidden = empty || state.view !== 'table'; $('#json-view').hidden = state.view !== 'json'; if (state.view === 'json') $('#empty-state').hidden = true;
   const layout = getLogLayout(state.schema);
-  $('#table-view table').classList.toggle('log-table', !!layout);
-  if (layout) {
+  const columns = visibleColumnIndexes(state.schema, state.visibleColumns);
+  $('#table-view table').classList.toggle('log-table', !!layout && state.visibleColumns === null);
+  $('#table-view table').classList.toggle('selected-log-columns', !!layout && state.visibleColumns !== null);
+  if (layout && state.visibleColumns === null) {
     $('thead').innerHTML = '<tr><th class="expand-col"><span class="sr-only">展开日志</span></th><th class="log-time-heading">时间</th><th>日志内容<span class="log-column-hint">点击行展开 extracted</span></th></tr>';
     $('#results-rows').innerHTML = rows.map(row => renderLogRow(row, layout)).join('');
   } else {
-    $('thead').innerHTML = `<tr><th class="expand-col"><span class="sr-only">详情</span></th>${state.schema.map(column => `<th title="${escapeHtml(column.type)}">${escapeHtml(column.name)}<small>${escapeHtml(column.type)}</small></th>`).join('')}</tr>`;
-    $('#results-rows').innerHTML = rows.map(row => `<tr class="result-row" tabindex="0" data-row-id="${row.index}" aria-label="查看第 ${(state.page - 1) * state.pageSize + row.index + 1} 条记录"><td>${icon('chevron-right')}</td>${row.values.map((value, index) => { const text = displayValue(value); const isLevel = ['level', 'severity', 'log.level'].includes(state.schema[index].name.toLowerCase()) && ['INFO', 'WARN', 'ERROR'].includes(text); return `<td title="${escapeHtml(text)}">${isLevel ? `<span class="level-badge ${text}">${text}</span>` : `<span class="cell-value${value === null ? ' null-value' : ''}">${escapeHtml(text)}</span>`}</td>`; }).join('')}</tr>`).join('');
+    $('thead').innerHTML = `<tr><th class="expand-col"><span class="sr-only">详情</span></th>${columns.map(index => { const column = state.schema[index]; return `<th title="${escapeHtml(column.type)}">${escapeHtml(column.name)}<small>${escapeHtml(column.type)}</small></th>`; }).join('')}</tr>`;
+    $('#results-rows').innerHTML = rows.map(row => `<tr class="result-row" tabindex="0" data-row-id="${row.index}" aria-label="查看第 ${(state.page - 1) * state.pageSize + row.index + 1} 条记录"><td>${icon('chevron-right')}</td>${columns.map(index => { const value = row.values[index], text = displayValue(value); const isLevel = ['level', 'severity', 'log.level'].includes(state.schema[index].name.toLowerCase()) && ['INFO', 'WARN', 'ERROR'].includes(text); return `<td title="${escapeHtml(text)}">${isLevel ? `<span class="level-badge ${text}">${text}</span>` : `<span class="cell-value${value === null ? ' null-value' : ''}">${escapeHtml(text)}</span>`}</td>`; }).join('')}</tr>`).join('');
   }
   $('#json-content').textContent = jsonText({ schema: state.schema, datarows: rows.map(row => row.values) }, null, 2);
   const first = empty ? 0 : (state.page - 1) * state.pageSize + 1;
   $('#page-summary').textContent = state.dirty && state.lastRequest ? '条件已修改，请执行查询' : state.lastRequest ? `${first}–${empty ? 0 : first + rows.length - 1} 行${state.hasNext ? ' · 还有下一页' : ' · 已到末页'}` : '等待查询';
   $('#page-summary').title = '页码由后台执行，不提供总命中数。'; $('#page-number').textContent = state.page;
   $('#prev-page').disabled = !!state.controller || state.dirty || state.page <= 1; $('#next-page').disabled = !!state.controller || state.dirty || !state.hasNext;
-  requestAnimationFrame(fitPageSize);
+  if (fit) requestAnimationFrame(fitPageSize);
 }
 function renderLogRow(row, layout) {
   const extracted = row.values[layout.extractedIndex], entries = extractedEntries(extracted);
@@ -230,14 +241,52 @@ function fitPageSize() {
   fitTimer = setTimeout(() => { if ($('#page-size').value !== 'auto' || size === state.pageSize || state.dirty) return; state.pageSize = size; runSearch({ continuation: true }); }, 180);
 }
 function renderFields() {
-  const term = $('#field-search').value.toLowerCase(), fields = sourceFields();
-  $('#field-count').textContent = `${fields.length} / ${state.schema.length}`;
-  const sources = fields.map((field, index) => ({ field, index })).filter(({ field }) => field.name.toLowerCase().includes(term));
+  const term = $('#field-search').value.toLowerCase();
+  $('#field-count').textContent = state.schema.length;
   const layout = getLogLayout(state.schema);
-  const resultField = field => `<div class="field-item result-field" title="${escapeHtml(field.type)}"><span class="field-type">=</span><span class="field-name">${escapeHtml(field.name)}</span></div>`;
-  const visibleFields = state.schema.filter(field => field.name.toLowerCase().includes(term));
-  const metadata = layout ? visibleFields.filter(field => layout.metadataIndexes.includes(state.schema.indexOf(field))) : [];
-  $('#field-list').innerHTML = '<p class="field-group-label">源字段 · 可筛选</p>' + (sources.map(({ field, index }) => `<button class="field-item" data-source-field="${index}" title="${escapeHtml(field.type)}"><span class="field-type">Aa</span><span class="field-name">${escapeHtml(field.name)}</span><span>${icon('plus')}</span></button>`).join('') || '<p class="modal-note">未配置源字段，可显式填写字段名。</p>') + `<p class="field-group-label">${layout ? '日志字段' : '结果列 / 别名 · 仅展示'}</p>` + visibleFields.filter(field => !metadata.includes(field)).map(resultField).join('') + (metadata.length ? `<details class="metadata-field-list"${term ? ' open' : ''}><summary>采集元数据 <span>${metadata.length}</span></summary>${metadata.map(resultField).join('')}</details>` : '');
+  const columns = visibleColumnIndexes(state.schema, state.visibleColumns);
+  $('#columns-summary').textContent = layout && state.visibleColumns === null ? '默认日志视图' : `显示 ${columns.length} / ${state.schema.length} 列`;
+  $('[data-action="reset-columns"]').disabled = !state.schema.length || state.visibleColumns === null;
+  $('[data-action="all-columns"]').disabled = !state.schema.length || columns.length === state.schema.length;
+  if (!state.schema.length) { $('#field-list').innerHTML = '<p class="field-empty">执行查询后，点击字段查看值，勾选字段显示为列。</p>'; return; }
+  const resultField = index => {
+    const field = state.schema[index], selected = columns.includes(index), expanded = state.activeField === index;
+    const type = /int|long|double|float|decimal|number|numeric/.test(field.type) ? '#' : /object|struct|array|map/.test(field.type) ? '{}' : 'Aa';
+    return `<div class="explore-field${expanded ? ' is-open' : ''}"><div class="explore-field-row"><input type="checkbox" data-column-index="${index}" aria-label="显示列 ${escapeHtml(field.name)}" title="${selected && columns.length === 1 ? '至少保留一列' : '在结果表格中显示此字段'}"${selected ? ' checked' : ''}${selected && columns.length === 1 ? ' disabled' : ''} /><button type="button" class="field-item" data-field-values="${index}" aria-label="查看 ${escapeHtml(field.name)} 的字段值" aria-expanded="${expanded}" aria-controls="field-values-${index}" title="${escapeHtml(field.name)} · ${escapeHtml(field.type)}"><span class="field-type">${type}</span><span class="field-name">${escapeHtml(field.name)}</span><span>${icon(expanded ? 'chevron-down' : 'chevron-right')}</span></button></div>${expanded ? renderFieldValues(index) : ''}</div>`;
+  };
+  const matches = state.schema.map((field, index) => ({ field, index })).filter(({ field }) => field.name.toLowerCase().includes(term)).map(item => item.index);
+  const metadata = layout ? matches.filter(index => layout.metadataIndexes.includes(index)) : [];
+  const metadataOpen = term || metadata.includes(state.activeField) || $('.metadata-field-list')?.open;
+  $('#field-list').innerHTML = (matches.filter(index => !metadata.includes(index)).map(resultField).join('') || (!metadata.length ? '<p class="field-empty">没有匹配的字段</p>' : '')) + (metadata.length ? `<details class="metadata-field-list"${metadataOpen ? ' open' : ''}><summary>采集元数据 <span>${metadata.length}</span></summary>${metadata.map(resultField).join('')}</details>` : '');
+}
+function syncFieldsToggle() { $('[data-action="fields"]').setAttribute('aria-expanded', getComputedStyle($('#fields-panel')).display !== 'none'); }
+function renderFieldValues(index) {
+  const field = state.schema[index], sample = fieldValues(state.rows, index);
+  const unique = state.schema.filter(item => item.name.toLowerCase() === field.name.toLowerCase()).length === 1;
+  const canFilter = canUseResultFields() && unique;
+  const items = sample.values.map(({ value, count }, valueIndex) => {
+    const label = value === '' ? '""（空字符串）' : displayValue(value);
+    let reason = !canFilter ? '快捷筛选适用于直接读取源表的查询；其他结果请使用源字段筛选。' : '';
+    try { quickValueFilter(field.name, value); } catch (error) { reason = error.message; }
+    const disabled = reason || state.controller ? ' disabled' : '';
+    return `<div class="field-value-row"><code class="field-sample${value === null ? ' null-value' : ''}" title="${escapeHtml(label)}">${escapeHtml(label)}</code><span class="field-value-count" title="当前页出现 ${count} 次">${count}</span><button type="button" class="field-value-action" data-quick-filter="${index}" data-value-index="${valueIndex}" aria-label="包含 ${escapeHtml(field.name)} = ${escapeHtml(label)}" title="${escapeHtml(reason || '包含此值，查询整个时间范围')}"${disabled}>${icon('plus')}</button><button type="button" class="field-value-action exclude" data-quick-filter="${index}" data-value-index="${valueIndex}" data-exclude="true" aria-label="排除 ${escapeHtml(field.name)} = ${escapeHtml(label)}" title="${escapeHtml(reason || '排除此值，查询整个时间范围')}"${disabled}>${icon('minus')}</button></div>`;
+  }).join('');
+  return `<section id="field-values-${index}" class="field-values" aria-label="${escapeHtml(field.name)} 的当前页字段值"><div class="field-values-heading"><span>当前页出现的值</span><span>${state.rows.length} 条记录</span></div>${items || '<p class="field-empty">当前页没有字段值</p>'}${sample.total > sample.values.length ? `<p class="field-value-note">显示最常见的 ${sample.values.length} / ${sample.total} 个值</p>` : ''}<p class="field-value-note">${state.dirty ? '条件已修改，请执行查询后再筛选。' : !canFilter ? '此结果可选择显示列；快捷筛选需要直接读取源表。' : '＋ 包含　− 排除 · 筛选整个时间范围'}</p></section>`;
+}
+function selectColumns(selection, focusIndex) {
+  clearTimeout(fitTimer); state.visibleColumns = selection; state.expandedRows.clear();
+  renderRows({ fit: false }); renderFields();
+  if (focusIndex !== undefined) $(`[data-column-index="${focusIndex}"]`)?.focus();
+}
+function applyQuickFilter(index, valueIndex, exclude) {
+  if (!canUseResultFields() || state.controller) return;
+  const field = state.schema[index], sample = fieldValues(state.rows, index).values[valueIndex];
+  if (!field || !sample) return;
+  try {
+    const filter = quickValueFilter(field.name, sample.value, exclude);
+    if (state.filters.some(item => JSON.stringify(item) === JSON.stringify(filter))) { toast('该筛选条件已存在'); return; }
+    state.filters.push(filter); conditionsChanged(); runSearch();
+  } catch (error) { toast(error.message); }
 }
 function openModal(title, content) { $('#modal-title').textContent = title; $('#modal-content').innerHTML = content; fillIcons($('#modal')); if (!$('#modal').open) $('#modal').showModal(); }
 function openFilter(index = -1) {
@@ -337,6 +386,8 @@ const pplAssist = attachPplAssist({
   onChange: () => { saveDraft(); conditionsChanged(); },
 });
 fillIcons();
+syncFieldsToggle();
+window.addEventListener('resize', syncFieldsToggle);
 $('#search-button').insertAdjacentHTML('afterend', '<button type="button" class="button secondary" id="cancel-query" hidden>停止等待</button>');
 $('.result-tools').insertAdjacentHTML('afterbegin', '<button class="text-button" id="export-status-button" hidden>导出状态</button>');
 $('#search-form').onsubmit = event => { event.preventDefault(); runSearch(); };
@@ -346,6 +397,12 @@ $('#dataset-select').onchange = event => setSource(event.target.value);
 $('#time-select').onchange = () => { updateAbsoluteControls(); conditionsChanged(); if ($('#time-select').value !== 'custom' && $('#query-input').value.trim()) runSearch(); };
 for (const id of ['time-from', 'time-to']) $(`#${id}`).oninput = () => { state.customTimeRange = null; conditionsChanged(); };
 $('#field-search').oninput = renderFields;
+document.addEventListener('change', event => {
+  if (event.target.matches('[data-column-index]')) {
+    const index = Number(event.target.dataset.columnIndex);
+    selectColumns(toggleColumn(state.schema, state.visibleColumns, index), index);
+  }
+});
 $('#page-size').onchange = event => { clearTimeout(fitTimer); if (event.target.value === 'auto') { fitPageSize(); return; } const size = Number(event.target.value); if (size === state.pageSize) return; state.pageSize = size; state.page = 1; if (state.lastRequest && !state.dirty) runSearch({ continuation: true }); else renderRows(); };
 $('#prev-page').onclick = () => runSearch({ number: state.page - 1, continuation: true });
 $('#next-page').onclick = () => runSearch({ number: state.page + 1, continuation: true });
@@ -370,6 +427,8 @@ document.addEventListener('click', async event => {
   if (data.deleteHistory !== undefined) { state.history.splice(Number(data.deleteHistory), 1); persist(historyKey, state.history); renderHistory(); return; }
   if (data.removeFilter !== undefined) { state.filters.splice(Number(data.removeFilter), 1); conditionsChanged(); runSearch(); return; }
   if (data.sourceField !== undefined) { openFilter(Number(data.sourceField)); return; }
+  if (data.fieldValues !== undefined) { const index = Number(data.fieldValues); state.activeField = state.activeField === index ? null : index; renderFields(); $(`[data-field-values="${index}"]`)?.focus(); return; }
+  if (data.quickFilter !== undefined) { applyQuickFilter(Number(data.quickFilter), Number(data.valueIndex), data.exclude === 'true'); return; }
   if (data.bucket !== undefined) {
     const bucket = state.chart.buckets[Number(data.bucket)], range = state.lastRequest?.timeRange; if (!range) return;
     const from = new Date(Math.max(Date.parse(bucket.from), Date.parse(range.from))).toISOString(), to = new Date(Math.min(Date.parse(bucket.to), Date.parse(range.to))).toISOString();
@@ -389,6 +448,8 @@ document.addEventListener('click', async event => {
     case 'close-detail': $('#detail-drawer').close(); break;
     case 'chart': state.chartVisible = !state.chartVisible; button.innerHTML = icon(state.chartVisible ? 'chevron-up' : 'chevron-down'); button.setAttribute('aria-expanded', state.chartVisible); button.setAttribute('aria-label', state.chartVisible ? '收起趋势图' : '展开趋势图'); renderChart(); break;
     case 'fields': { const panel = $('#fields-panel'); const visible = getComputedStyle(panel).display !== 'none'; panel.style.display = visible ? 'none' : 'block'; button.setAttribute('aria-expanded', !visible); break; }
+    case 'all-columns': selectColumns(state.schema.map((_, index) => index)); break;
+    case 'reset-columns': selectColumns(null); break;
     case 'export': exportDialog(); break;
     case 'refresh': runSearch(); break;
     case 'reset': state.filters = []; conditionsChanged(); runSearch(); break;
