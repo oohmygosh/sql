@@ -6,6 +6,8 @@
 plugins { id 'application'; id 'org.springframework.boot' version '3.5.9' }
 dependencies {
     implementation project(':spring-boot-starter')
+    implementation project(':protocol')
+    implementation 'org.springframework.boot:spring-boot-starter-web:3.5.9'
     implementation project(':elasticsearch')
     implementation project(':clickhouse')
     testImplementation('org.springframework.boot:spring-boot-starter-test:3.5.9') {
@@ -25,10 +27,15 @@ test {
     useJUnitPlatform()
     def liveConfigured = providers.environmentVariable('ES_PASSWORD').isPresent()
             && providers.environmentVariable('CLICKHOUSE_PASSWORD').isPresent()
+    def auditConfigured = providers.environmentVariable('LIVE_QUERY_AUDIT').getOrElse('false') == 'true'
     inputs.property('liveDataSourcesConfigured', liveConfigured)
+    inputs.property('liveQueryAuditConfigured', auditConfigured)
+    if (auditConfigured) {
+        inputs.file('build/reports/live-audit/cases.json')
+    }
     // External data can change independently of the build inputs.
-    outputs.upToDateWhen { !liveConfigured }
-    outputs.cacheIf { !liveConfigured }
+    outputs.upToDateWhen { !liveConfigured && !auditConfigured }
+    outputs.cacheIf { !liveConfigured && !auditConfigured }
     testLogging {
         events 'passed', 'skipped', 'failed'
         exceptionFormat 'full'

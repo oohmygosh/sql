@@ -83,7 +83,7 @@ public final class UnifiedQueryService {
     Objects.requireNonNull(query, "query");
     if (highlight != null && !backend.supportsHighlight())
       throw new UnsupportedOperationException("Highlight is not supported by " + backend.type());
-    try (Hook.Closeable hook =
+    try (Hook.Closeable ignored =
         Hook.PLANNER.addThread(
             (RelOptPlanner planner) -> backend.rules().forEach(planner::addRule))) {
       UnifiedQueryContext.Builder builder =

@@ -13,7 +13,7 @@ The embedded entry point uses the existing SQL/PPL parsers, Calcite planner, fun
 | `clickhouse` | JDBC schemas, conservative ClickHouse dialect/convention and relational pushdown |
 | `spring-boot-autoconfigure` | Properties, optional backend factories, ownership and user bean overrides |
 | `spring-boot-starter` | Minimal dependency bundle; database backends are selected separately |
-| `spring-boot-example` | Executable, non-web Spring Boot command-line example |
+| `spring-boot-example` | Executable Spring Boot Web example with SQL/PPL CSV export |
 
 The shared API no longer has a runtime dependency on the OpenSearch server through `protocol`. OpenSearch error adapters are discovered only when the OpenSearch module is present. The original plugin keeps its own scheduling, resource protection and legacy `PhysicalPlan` execution path. `DelegatingExecutionEngine` continues to select vectorized execution extensions; it is not a data source router.
 
@@ -123,16 +123,31 @@ Authenticated test servers can use `ELASTICSEARCH_TEST_USERNAME` / `ELASTICSEARC
 
 The integration classes are skipped when their endpoint variables are absent. They cover both languages, real pushdown, same-source JOIN, IN subqueries, windows, nulls, exact DISTINCT, result types and ES cross-page document/bucket retrieval. Supply credentials through dedicated test configuration; production credentials do not belong in command-line arguments.
 
-To run the packaged example:
+The packaged example starts a Web server on port `8080` without application arguments:
 
 ```sh
-java -jar spring-boot-example/build/libs/spring-boot-example-3.10.0.0-SNAPSHOT.jar \
-  --spring.config.additional-location=file:/path/to/application.yml \
-  --source=analytics --language=PPL \
-  '--query=source=employees | stats count() as n by department'
+java -jar spring-boot-example/build/libs/spring-boot-example-3.10.0.0-SNAPSHOT.jar
 ```
 
-The example exposes no HTTP endpoint and closes its Spring context after the query. Spring Boot host applications manage their normal application lifecycle independently.
+Configure the backend connections through environment variables or add
+`--spring.config.additional-location=file:/path/to/application.yml` to load an external
+configuration file. Use the standard Spring Boot `--server.port` option to change the port.
+The Spring context remains active until application shutdown.
+
+Submit SQL or PPL to `POST /query/export` to download the returned rows as CSV. For example,
+with an existing `employees` table in the configured ClickHouse database:
+
+```sh
+curl --fail --output result.csv \
+  --request POST 'http://localhost:8080/query/export' \
+  --header 'Content-Type: application/json' \
+  --data-raw '{"source":"analytics","language":"PPL","query":"source=employees | stats count() as n by department"}'
+```
+
+The request requires `query`; `source` defaults to the configured default data source and
+`language` defaults to `SQL`. The existing output size limit still applies (default `10000`
+rows). See the [example README](../../spring-boot-example/README.md) for connection settings,
+SQL/PPL requests and response details.
 
 ## Expanded SQL/PPL result corpus
 

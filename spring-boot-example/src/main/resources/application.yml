@@ -2,7 +2,6 @@ spring:
   application:
     name: unified-query-example
   main:
-    web-application-type: none
     banner-mode: "off"
 
 logging:
