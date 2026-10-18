@@ -110,6 +110,12 @@ java -jar "$JAR" --server.port=8080
 
 IDE 可运行 `org.opensearch.sql.example.QueryApplication`，设置相同环境变量，无需程序参数。
 
+## 日志
+
+示例使用 Spring Boot 日志 starter 提供的 Logback，配置位于 `src/main/resources/logback-spring.xml`。默认以 `INFO` 级别同时输出到控制台和当前工作目录下的 `log/unified-query-example.log`，包含时间、线程、级别、logger 及异常堆栈。日志按天或单文件达到 `10MB` 滚动，历史文件压缩保存，最多保留 7 天且归档总量不超过 `100MB`。
+
+通过 `LOGGING_FILE_NAME` 环境变量或 `--logging.file.name=/path/to/example.log` 修改文件位置；通过 `LOGGING_LEVEL_ROOT` 或 `--logging.level.root=DEBUG` 调整根日志级别，也可用 `--logging.level.org.opensearch.sql=DEBUG` 仅开启引擎调试日志。滚动策略可通过 `logging.logback.rollingpolicy` 下的 `max-file-size`、`max-history` 和 `total-size-cap` 覆盖。
+
 ## 搜索 HTTP 协议
 
 | 方法 | 路径 | 用途 |

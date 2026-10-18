@@ -8,6 +8,7 @@ dependencies {
     implementation project(':spring-boot-starter')
     implementation project(':protocol')
     implementation 'org.springframework.boot:spring-boot-starter-web:3.5.9'
+    runtimeOnly 'org.springframework.boot:spring-boot-starter-logging:3.5.9'
     implementation project(':elasticsearch')
     implementation project(':clickhouse')
     testImplementation('org.springframework.boot:spring-boot-starter-test:3.5.9') {
@@ -41,9 +42,11 @@ tasks.named('processResources') {
     from('frontend/dist') { into 'static' }
 }
 
-// Spring's spring-jcl supplies the Commons Logging API used by the backend clients.
 configurations.configureEach {
+    // Spring's spring-jcl supplies the Commons Logging API used by the backend clients.
     exclude group: 'commons-logging', module: 'commons-logging'
+    // Route engine Log4j API calls through Boot's SLF4J bridge to Logback.
+    exclude group: 'org.apache.logging.log4j', module: 'log4j-core'
 }
 
 test {
