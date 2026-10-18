@@ -114,8 +114,9 @@ and `stream(QueryExecutionRequest, QueryRowConsumer, QueryCancellation)`.
 the unique source scan through typed expressions and plan nodes. It preserves the original
 SQL/PPL text, OR grouping, `HAVING`, and PPL operators after `stats`. Unknown fields, invalid
 literal types, and ambiguous binding across joins or branches fail rather than ignoring inputs.
-Filters support `eq/ne/gt/gte/lt/lte/in/is_null/is_not_null/contains`; `contains` treats its value
-literally, including SQL wildcard characters. Time uses `[from,to)` and does not require the
+Filters support `eq/ne/gt/gte/lt/lte/in/is_null/is_not_null/contains`; `contains` matches PPL's
+ASCII case-insensitive ILIKE semantics and treats its value literally, including SQL wildcard
+characters. Time uses `[from,to)` and does not require the
 source time field to appear in the result projection.
 
 Result windows wrap the complete user result and retain explicit `LIMIT/head`. A host may ask

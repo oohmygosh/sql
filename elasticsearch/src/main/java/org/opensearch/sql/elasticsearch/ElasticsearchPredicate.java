@@ -28,7 +28,12 @@ public final class ElasticsearchPredicate {
   private ElasticsearchPredicate() {}
 
   public static Map<String, Object> translate(RexNode expression, List<Field> fields) {
-    return translate(expression, fields, true);
+    return translate(expression, fields, fields);
+  }
+
+  public static Map<String, Object> translate(
+      RexNode expression, List<Field> fields, List<Field> sourceFields) {
+    return translate(expression, fields, sourceFields, true);
   }
 
   /**
@@ -36,7 +41,7 @@ public final class ElasticsearchPredicate {
    * only the TRUE query would incorrectly admit nulls under NOT, especially inside AND/OR.
    */
   private static Map<String, Object> translate(
-      RexNode expression, List<Field> fields, boolean truth) {
+      RexNode expression, List<Field> fields, List<Field> sourceFields, boolean truth) {
     if (expression instanceof RexLiteral literal) {
       if (literal.isNull()) return Map.of("match_none", Map.of());
       if (literal.getType().getSqlTypeName() != SqlTypeName.BOOLEAN) return null;
@@ -77,7 +82,7 @@ public final class ElasticsearchPredicate {
     if (call.getKind() == SqlKind.AND || call.getKind() == SqlKind.OR) {
       List<Map<String, Object>> children = new ArrayList<>();
       for (RexNode arg : args) {
-        Map<String, Object> child = translate(arg, fields, truth);
+        Map<String, Object> child = translate(arg, fields, sourceFields, truth);
         // In particular an OR must never be partially pushed.
         if (child == null) return null;
         children.add(child);
@@ -88,11 +93,11 @@ public final class ElasticsearchPredicate {
       RexNode arg = args.getFirst();
       switch (call.getKind()) {
         case NOT:
-          return translate(arg, fields, !truth);
+          return translate(arg, fields, sourceFields, !truth);
         case IS_TRUE, IS_FALSE, IS_NOT_TRUE, IS_NOT_FALSE:
           boolean wanted =
               call.getKind() == SqlKind.IS_TRUE || call.getKind() == SqlKind.IS_NOT_TRUE;
-          Map<String, Object> selected = translate(arg, fields, wanted);
+          Map<String, Object> selected = translate(arg, fields, sourceFields, wanted);
           boolean complement =
               call.getKind() == SqlKind.IS_NOT_TRUE || call.getKind() == SqlKind.IS_NOT_FALSE;
           return selected == null ? null : truth != complement ? selected : not(selected);
@@ -104,8 +109,8 @@ public final class ElasticsearchPredicate {
             if (!field.supportsExistence() || field.name().equals("_score")) return null;
             known = exists(field);
           } else {
-            Map<String, Object> yes = translate(arg, fields, true);
-            Map<String, Object> no = translate(arg, fields, false);
+            Map<String, Object> yes = translate(arg, fields, sourceFields, true);
+            Map<String, Object> no = translate(arg, fields, sourceFields, false);
             if (yes == null || no == null) return null;
             known = or(List.of(yes, no));
           }
@@ -115,7 +120,8 @@ public final class ElasticsearchPredicate {
       }
     }
     if (call.getKind() == SqlKind.LIKE && call.getOperator() instanceof SqlLikeOperator like) {
-      return pattern(call, fields, truth != like.isNegated(), !like.isCaseSensitive(), true);
+      return pattern(
+          call, fields, sourceFields, truth != like.isNegated(), !like.isCaseSensitive(), true);
     }
     if (call.getOperator() == SqlLibraryOperators.REGEXP_CONTAINS
         || call.getOperator() == SqlLibraryOperators.REGEXP
@@ -124,6 +130,7 @@ public final class ElasticsearchPredicate {
       return pattern(
           call,
           fields,
+          sourceFields,
           truth != (call.getOperator() == SqlLibraryOperators.NOT_RLIKE),
           false,
           false);
@@ -208,16 +215,18 @@ public final class ElasticsearchPredicate {
   }
 
   private static Map<String, Object> pattern(
-      RexCall call, List<Field> fields, boolean truth, boolean insensitive, boolean like) {
+      RexCall call,
+      List<Field> fields,
+      List<Field> sourceFields,
+      boolean truth,
+      boolean insensitive,
+      boolean like) {
     List<RexNode> args = call.getOperands();
     if (args.size() != 2 && !(like && args.size() == 3)) return null;
     RexInputRef ref = inputRef(args.get(0));
     if (ref == null || !(args.get(1) instanceof RexLiteral literal)) return null;
-    Field field = fields.get(ref.getIndex());
-    // Metadata fields such as _id and analyzed/normalized values do not support these semantics.
-    if (!field.supportsComparison()
-        || !field.mappingType().equals("keyword")
-        || Set.of("_id", "_index", "_score").contains(field.name())) return null;
+    Field field = patternField(fields.get(ref.getIndex()), sourceFields);
+    if (field == null) return null;
     if (literal.isNull()) return Map.of("match_none", Map.of());
     if (!SqlTypeName.CHAR_TYPES.contains(literal.getType().getSqlTypeName())) return null;
     String value = literal.getValueAs(String.class);
@@ -238,6 +247,30 @@ public final class ElasticsearchPredicate {
       query = wildcard == null ? null : Map.of("wildcard", Map.of(field.name(), wildcard));
     }
     return query == null ? null : truth ? query : and(List.of(exists(field), not(query)));
+  }
+
+  /** Use a multi-field only when it indexes the same raw value in every contributing index. */
+  private static Field patternField(Field field, List<Field> sourceFields) {
+    if (Set.of("_id", "_index", "_score").contains(field.name())) return null;
+    if (field.supportsPattern()) return field;
+    if (!field.mappingType().equals("text") || !field.sourceCompatible()) return null;
+    return sourceFields.stream()
+        .filter(
+            candidate -> candidate.origin() == ElasticsearchQueryBackend.SourceOrigin.MULTIFIELD)
+        .filter(candidate -> candidate.name().startsWith(field.name() + "."))
+        .filter(Field::supportsPattern)
+        .filter(candidate -> candidate.source().equals(field.source()))
+        .filter(candidate -> candidate.sources().keySet().equals(field.sources().keySet()))
+        .filter(
+            candidate ->
+                field.sources().keySet().stream()
+                    .allMatch(index -> candidate.source(index).equals(field.source(index))))
+        // Prefer the index intended for substring queries; never depend on a suffix such as .wc.
+        .sorted(
+            java.util.Comparator.comparingInt(
+                candidate -> candidate.mappingType().equals("wildcard") ? 0 : 1))
+        .findFirst()
+        .orElse(null);
   }
 
   private static Map<String, Object> like(

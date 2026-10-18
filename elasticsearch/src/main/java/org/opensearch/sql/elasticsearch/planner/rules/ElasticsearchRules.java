@@ -18,6 +18,7 @@ public final class ElasticsearchRules {
           ElasticsearchFilterRule.INSTANCE,
           ElasticsearchProjectRule.INSTANCE,
           ElasticsearchSortRule.INSTANCE,
+          ElasticsearchSortRule.FILTER,
           ElasticsearchAggregateRule.DIRECT,
           ElasticsearchAggregateRule.PROJECT);
 }

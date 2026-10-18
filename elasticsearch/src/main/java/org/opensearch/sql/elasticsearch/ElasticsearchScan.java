@@ -39,6 +39,7 @@ public final class ElasticsearchScan extends TableScan implements EnumerableRel,
   private final RelOptTable table;
   private final ElasticsearchTable source;
   private final ElasticsearchQueryPlan queryPlan;
+  private final double filteredRows;
 
   private ElasticsearchScan(
       RelOptCluster cluster,
@@ -46,12 +47,14 @@ public final class ElasticsearchScan extends TableScan implements EnumerableRel,
       RelOptTable table,
       ElasticsearchTable source,
       RelDataType type,
-      ElasticsearchQueryPlan queryPlan) {
+      ElasticsearchQueryPlan queryPlan,
+      double filteredRows) {
     super(cluster, traits, List.of(), table);
     this.table = table;
     this.source = source;
     this.rowType = type;
     this.queryPlan = queryPlan;
+    this.filteredRows = filteredRows;
   }
 
   static ElasticsearchScan create(
@@ -63,7 +66,8 @@ public final class ElasticsearchScan extends TableScan implements EnumerableRel,
         source,
         table.getRowType(),
         new ElasticsearchQueryPlan(
-            source.fields, Map.of("match_all", Map.of()), List.of(), 0, null, null, null));
+            source.fields, Map.of("match_all", Map.of()), List.of(), 0, null, null, null),
+        100000);
   }
 
   public ElasticsearchQueryPlan queryPlan() {
@@ -81,7 +85,13 @@ public final class ElasticsearchScan extends TableScan implements EnumerableRel,
 
   public ElasticsearchScan withPlan(
       RelDataType type, RelTraitSet traits, ElasticsearchQueryPlan plan) {
-    return new ElasticsearchScan(getCluster(), traits, table, source, type, plan);
+    return new ElasticsearchScan(getCluster(), traits, table, source, type, plan, filteredRows);
+  }
+
+  /** Retain the selectivity of each native predicate when comparing local and remote plans. */
+  public ElasticsearchScan withSelectivity(double selectivity) {
+    return new ElasticsearchScan(
+        getCluster(), traitSet, table, source, rowType, queryPlan, filteredRows * selectivity);
   }
 
   /** Materialize additional source columns without changing existing input ordinals. */
@@ -143,11 +153,8 @@ public final class ElasticsearchScan extends TableScan implements EnumerableRel,
 
   @Override
   public double estimateRowCount(RelMetadataQuery mq) {
-    return queryPlan.fetch() != null
-        ? queryPlan.fetch()
-        : queryPlan.isAggregate()
-            ? 100
-            : queryPlan.query().containsKey("match_all") ? 100000 : 10000;
+    double rows = queryPlan.isAggregate() ? 100 : Math.max(0, filteredRows - queryPlan.offset());
+    return queryPlan.fetch() == null ? rows : Math.min(rows, queryPlan.fetch());
   }
 
   @Override

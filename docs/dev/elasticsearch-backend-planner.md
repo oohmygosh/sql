@@ -19,6 +19,10 @@ A native operation must preserve those logical values. Its eligibility is operat
   treated as equivalent to values present in `_source`.
 - Mapping modifiers such as `normalizer`, `null_value`, and `ignore_above` conservatively
   retain affected computations locally.
+- LIKE/ILIKE and supported literal regular expressions can use scalar `keyword` or `wildcard`
+  fields. A pattern on `text` can automatically use a source-equivalent multi-field, preferring
+  `wildcard`, only when it covers every index contributing the parent field. This does not make
+  wildcard fields eligible for ordering, range comparisons, or grouping.
 - Direct `date_nanos` comparisons and grouping remain local because Calcite timestamps
   have millisecond precision. UTC time buckets at least one millisecond wide can remain native.
 - Native sorting supplies `unmapped_type` so an unmapped index in a wildcard source has
@@ -54,6 +58,8 @@ projections can still encounter Calcite's existing `ANY` typing limitations.
    aggregation, and conversion to Enumerable convention. `ElasticsearchFilterPushdown`
    returns native conjunctions, a mandatory local residual, and refusal reasons. An OR is
    native only when all of its branches can be translated with SQL null semantics preserved.
+   Native scans retain the estimated selectivity of each pushed conjunction, so adding source
+   time constraints does not erase the estimated benefit of another native predicate.
 5. `ElasticsearchScan` holds an `ElasticsearchQueryPlan`. `ElasticsearchRequestBuilder`
    encodes requests, while `ElasticsearchSearchEnumerator` owns PIT IDs, pagination cursors,
    offsets and emitted-row counts. `ElasticsearchValueDecoder` handles source and aggregate
@@ -63,6 +69,8 @@ A native final limit must not cross a residual filter or local sort. A previousl
 limit also prevents later filtering/aggregation from moving below it. Request page size is
 only a transport setting and must not act as a logical limit. Source projection is allowed
 with native computation disabled, since it preserves values while reducing transport work.
+Ordering can move below a deterministic residual filter; OFFSET/FETCH stay above that filter.
+Volatile predicates and a scan's existing result window prevent this reordering.
 
 Explain output shows native query/fields/sort/fetch/aggregation, the remaining Enumerable
 operators, relevant field constraints, and whether native computation was disabled.

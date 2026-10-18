@@ -12,24 +12,36 @@ import java.util.Map;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.plan.RelOptRuleCall;
 import org.apache.calcite.rel.RelFieldCollation;
+import org.apache.calcite.rel.RelNode;
+import org.apache.calcite.rel.core.Filter;
 import org.apache.calcite.rel.core.Sort;
 import org.apache.calcite.rex.RexLiteral;
+import org.apache.calcite.rex.RexUtil;
 import org.opensearch.sql.elasticsearch.ElasticsearchQueryBackend.Field;
 import org.opensearch.sql.elasticsearch.ElasticsearchQueryPlan;
 import org.opensearch.sql.elasticsearch.ElasticsearchScan;
 
 /** Native ordering requires order-equivalence, not merely index availability. */
 final class ElasticsearchSortRule extends RelOptRule {
-  static final ElasticsearchSortRule INSTANCE = new ElasticsearchSortRule();
+  static final ElasticsearchSortRule INSTANCE = new ElasticsearchSortRule(false);
+  static final ElasticsearchSortRule FILTER = new ElasticsearchSortRule(true);
+  private final boolean throughFilter;
 
-  private ElasticsearchSortRule() {
-    super(operand(Sort.class, operand(ElasticsearchScan.class, none())), "ElasticsearchSort");
+  private ElasticsearchSortRule(boolean throughFilter) {
+    super(
+        throughFilter
+            ? operand(Sort.class, operand(Filter.class, operand(ElasticsearchScan.class, none())))
+            : operand(Sort.class, operand(ElasticsearchScan.class, none())),
+        throughFilter ? "ElasticsearchSortFilter" : "ElasticsearchSort");
+    this.throughFilter = throughFilter;
   }
 
   @Override
   public void onMatch(RelOptRuleCall call) {
     Sort sort = call.rel(0);
-    ElasticsearchScan scan = call.rel(1);
+    ElasticsearchScan scan = call.rel(throughFilter ? 2 : 1);
+    Filter filter = throughFilter ? call.rel(1) : null;
+    if (filter != null && !RexUtil.isDeterministic(filter.getCondition())) return;
     var plan = scan.queryPlan();
     if (!scan.pushdownEnabled() || plan.isAggregate() || plan.fetch() != null || plan.offset() != 0)
       return;
@@ -51,7 +63,10 @@ final class ElasticsearchSortRule extends RelOptRule {
       ordering.add(Map.of(field.name(), options));
     }
     if (ordering.isEmpty()) ordering = plan.sort();
-    call.transformTo(
+    if (throughFilter
+        && (sort.getCollation().getFieldCollations().isEmpty() || ordering.equals(plan.sort())))
+      return;
+    RelNode result =
         scan.withPlan(
             sort.getRowType(),
             scan.getTraitSet().replace(sort.getCollation()),
@@ -59,9 +74,23 @@ final class ElasticsearchSortRule extends RelOptRule {
                 plan.fields(),
                 plan.query(),
                 ordering,
-                sort.offset == null ? 0 : ((RexLiteral) sort.offset).getValueAs(Long.class),
-                sort.fetch == null ? null : ((RexLiteral) sort.fetch).getValueAs(Long.class),
+                throughFilter || sort.offset == null
+                    ? 0
+                    : ((RexLiteral) sort.offset).getValueAs(Long.class),
+                throughFilter || sort.fetch == null
+                    ? null
+                    : ((RexLiteral) sort.fetch).getValueAs(Long.class),
                 null,
-                plan.highlight())));
+                plan.highlight()));
+    if (filter != null) {
+      result =
+          filter.copy(
+              filter.getTraitSet().replace(sort.getCollation()), result, filter.getCondition());
+      // Only ordering commutes with a filter. Keep OFFSET/FETCH above the residual predicate.
+      if (sort.offset != null || sort.fetch != null)
+        result =
+            sort.copy(sort.getTraitSet(), result, sort.getCollation(), sort.offset, sort.fetch);
+    }
+    call.transformTo(result);
   }
 }

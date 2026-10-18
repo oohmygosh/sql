@@ -40,6 +40,7 @@ final class ElasticsearchFilterRule extends RelOptRule {
         ElasticsearchFilterPushdown.analyze(
             condition,
             plan.fields(),
+            scan.sourceFields(),
             scan.getCluster().getRexBuilder(),
             scan.pushdownEnabled() && plan.fetch() == null && plan.offset() == 0);
     if (decision.predicates().isEmpty() && condition.equals(filter.getCondition())) return;
@@ -48,16 +49,17 @@ final class ElasticsearchFilterRule extends RelOptRule {
       predicates.add(plan.query());
       scan =
           scan.withPlan(
-              scan.getRowType(),
-              scan.getTraitSet(),
-              new ElasticsearchQueryPlan(
-                  plan.fields(),
-                  ElasticsearchPredicate.and(predicates),
-                  plan.sort(),
-                  plan.offset(),
-                  plan.fetch(),
-                  null,
-                  plan.highlight()));
+                  scan.getRowType(),
+                  scan.getTraitSet(),
+                  new ElasticsearchQueryPlan(
+                      plan.fields(),
+                      ElasticsearchPredicate.and(predicates),
+                      plan.sort(),
+                      plan.offset(),
+                      plan.fetch(),
+                      null,
+                      plan.highlight()))
+              .withSelectivity(decision.selectivity());
     }
     RelNode result = scan;
     if (decision.residual() != null)

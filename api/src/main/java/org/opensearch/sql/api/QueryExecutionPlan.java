@@ -29,6 +29,7 @@ import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.rex.RexOver;
 import org.apache.calcite.rex.RexShuttle;
 import org.apache.calcite.rex.RexSubQuery;
+import org.apache.calcite.sql.fun.SqlLibraryOperators;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.type.SqlTypeName;
 import org.apache.calcite.sql.type.SqlTypeUtil;
@@ -159,7 +160,7 @@ final class QueryExecutionPlan {
           String escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
           condition =
               rex.makeCall(
-                  SqlStdOperatorTable.LIKE,
+                  SqlLibraryOperators.ILIKE,
                   field,
                   rex.makeLiteral("%" + escaped + "%"),
                   rex.makeLiteral("\\"));

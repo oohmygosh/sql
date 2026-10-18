@@ -85,6 +85,28 @@ public class UnifiedQueryServiceTest extends UnifiedQueryTestBase {
   }
 
   @Test
+  public void structuredContainsMatchesPplCaseInsensitiveSemantics() {
+    var service = new UnifiedQueryService(List.of(backend("memory")), "memory");
+    for (String value : List.of("ali", "ALI", "", "%", "_")) {
+      var ppl =
+          service.execute(
+              QueryType.PPL, "source=employees | where name contains '" + value + "' | sort id");
+      var structured =
+          service.execute(
+              new QueryExecutionRequest(
+                  "memory",
+                  QueryType.PPL,
+                  "source=employees | sort id",
+                  null,
+                  List.of(new QueryExecutionRequest.FieldFilter("name", "contains", value)),
+                  null,
+                  null));
+      assertEquals(value, ppl.getResults(), structured.getResults());
+      if (value.equals("ALI")) assertEquals(1, structured.getResults().size());
+    }
+  }
+
+  @Test
   public void duplicateAndUnknownSourcesFail() {
     assertThrows(
         IllegalArgumentException.class,

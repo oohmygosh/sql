@@ -1,0 +1,76 @@
+name: Search pushdown end-to-end regressions
+
+on:
+  pull_request:
+    paths:
+      - 'api/**'
+      - 'common/**'
+      - 'core/**'
+      - 'ppl/**'
+      - 'sql/**'
+      - 'protocol/**'
+      - 'elasticsearch/**'
+      - 'spring-boot-*/**'
+      - '**/*.gradle'
+      - 'gradle/**'
+      - '.github/workflows/search-pushdown-e2e.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'api/**'
+      - 'common/**'
+      - 'core/**'
+      - 'ppl/**'
+      - 'sql/**'
+      - 'protocol/**'
+      - 'elasticsearch/**'
+      - 'spring-boot-*/**'
+      - '**/*.gradle'
+      - 'gradle/**'
+      - '.github/workflows/search-pushdown-e2e.yml'
+  workflow_dispatch:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  search-pushdown:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.19.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: 'false'
+          ES_JAVA_OPTS: '-Xms512m -Xmx512m'
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl --fail --silent http://localhost:9200/_cluster/health?wait_for_status=yellow"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      ELASTICSEARCH_TEST_URL: http://localhost:9200
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - name: Check corpus and run all 57 HTTP/ES cases
+        run: ./gradlew :spring-boot-example:test :spring-boot-example:searchE2eTest --no-daemon --console=plain
+      - name: Upload results and actual HTTP execution plans
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: search-pushdown-e2e
+          path: |
+            spring-boot-example/build/test-results/
+            spring-boot-example/build/reports/tests/
+            spring-boot-example/build/reports/search-e2e/
+            spring-boot-example/build/test-logs/

@@ -63,6 +63,54 @@ class ElasticsearchPredicatePushdownTest {
   private final RexInputRef label = ref(3);
 
   @Test
+  void patternsUseSafeWildcardMultifieldsWithoutEnablingOrderingOrRangeComparisons() {
+    Field wildcard = new Field("message.wc", "message", "wildcard");
+    assertTrue(wildcard.supportsPattern());
+    assertFalse(wildcard.supportsComparison());
+    assertFalse(wildcard.supportsOrdering());
+    assertFalse(wildcard.supportsGrouping());
+    RexNode pattern = call(SqlLibraryOperators.ILIKE, ref(4), rex.makeLiteral("%pass%"));
+    Map<String, Object> safe = patternMapping(Map.of("type", "wildcard"));
+    assertEquals(
+        Map.of(
+            "regexp",
+            Map.of("message.wc", Map.of("value", ".*[pP][aA][sS][sS].*", "flags", "NONE"))),
+        mappedPattern(pattern, Map.of("a", safe, "b", safe)));
+
+    for (Map<String, Object> options :
+        List.of(
+            Map.<String, Object>of("type", "wildcard", "ignore_above", 256),
+            Map.<String, Object>of("type", "wildcard", "null_value", "pass"),
+            Map.<String, Object>of("type", "keyword", "normalizer", "lowercase"),
+            Map.<String, Object>of("type", "keyword", "index", false),
+            Map.<String, Object>of("type", "keyword", "ignore_above", 256))) {
+      assertNull(mappedPattern(pattern, Map.of("a", patternMapping(options))), options.toString());
+      assertNull(
+          mappedPattern(pattern, Map.of("a", safe, "b", patternMapping(options))),
+          options.toString());
+    }
+    Map<String, Object> missing =
+        Map.of("mappings", Map.of("properties", Map.of("message", Map.of("type", "text"))));
+    assertNull(mappedPattern(pattern, Map.of("a", safe, "b", missing)));
+    assertNull(ElasticsearchPredicate.translate(pattern, FIELDS));
+  }
+
+  private static Map<String, Object> patternMapping(Map<String, Object> options) {
+    return Map.of(
+        "mappings",
+        Map.of(
+            "properties",
+            Map.of("message", Map.of("type", "text", "fields", Map.of("wc", options)))));
+  }
+
+  private static Map<String, Object> mappedPattern(RexNode pattern, Map<String, Object> mappings) {
+    Map<String, Field> discovered = ElasticsearchQueryBackend.mappingFields(mappings);
+    List<Field> inputs = new ArrayList<>(FIELDS);
+    inputs.set(4, discovered.get("message"));
+    return ElasticsearchPredicate.translate(pattern, inputs, List.copyOf(discovered.values()));
+  }
+
+  @Test
   void booleanTruthTablesAgreeWithCalciteIncludingMissingAndExplicitNull() {
     RexNode comparison =
         call(SqlStdOperatorTable.GREATER_THAN, amount, rex.makeExactLiteral(BigDecimal.ONE));

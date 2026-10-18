@@ -11,6 +11,8 @@ dependencies {
     runtimeOnly 'org.springframework.boot:spring-boot-starter-logging:3.5.9'
     implementation project(':elasticsearch')
     implementation project(':clickhouse')
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.9.3'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 application { mainClass = 'org.opensearch.sql.example.QueryApplication' }
 
@@ -42,4 +44,34 @@ configurations.configureEach {
     exclude group: 'commons-logging', module: 'commons-logging'
     // Route engine Log4j API calls through Boot's SLF4J bridge to Logback.
     exclude group: 'org.apache.logging.log4j', module: 'log4j-core'
+}
+
+tasks.withType(Test).configureEach { useJUnitPlatform() }
+
+tasks.named('test') {
+    exclude '**/SearchPushdownE2eTest.class'
+}
+
+tasks.register('searchE2eTest', Test) {
+    description = 'Runs all 57 search HTTP/Elasticsearch result and pushdown-plan regressions.'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    include '**/SearchPushdownE2eTest.class'
+    maxParallelForks = 1
+    timeout = java.time.Duration.ofMinutes(10)
+    systemProperty 'search.e2e.reportDirectory', layout.buildDirectory.dir('reports/search-e2e').get().asFile.absolutePath
+    systemProperty 'search.e2e.logFile', layout.buildDirectory.file('test-logs/search-e2e.log').get().asFile.absolutePath
+    // Results depend on the live cluster; every explicit invocation must execute the suite.
+    outputs.upToDateWhen { false }
+    outputs.cacheIf { false }
+    doFirst {
+        if (!System.getenv('ELASTICSEARCH_TEST_URL')?.trim()) {
+            throw new GradleException('searchE2eTest requires ELASTICSEARCH_TEST_URL; no cases were run.')
+        }
+    }
+    testLogging {
+        events 'passed', 'failed', 'skipped'
+        exceptionFormat 'full'
+    }
 }

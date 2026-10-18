@@ -1,0 +1,29 @@
+# Copyright OpenSearch Contributors
+# SPDX-License-Identifier: Apache-2.0
+spring:
+  application:
+    name: search-pushdown-e2e
+  main:
+    banner-mode: "off"
+server:
+  address: 127.0.0.1
+  port: 0
+logging:
+  file:
+    name: ${search.e2e.logFile:build/test-logs/search-e2e.log}
+  level:
+    root: WARN
+unified-query:
+  default-data-source: logs
+  search:
+    default-time-zone: Asia/Shanghai
+    time-fields:
+      logs: timestamp
+    id-fields:
+      logs: id
+  data-sources:
+    logs:
+      type: elasticsearch
+      url: ${ELASTICSEARCH_TEST_URL}
+      username: ${ELASTICSEARCH_TEST_USERNAME:}
+      password: ${ELASTICSEARCH_TEST_PASSWORD:}

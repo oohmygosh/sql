@@ -556,6 +556,11 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
       return comparisonRejectionReason() == null;
     }
 
+    /** Pattern matching does not require ordering or range-comparison support. */
+    public boolean supportsPattern() {
+      return supportsExistence() && Set.of("keyword", "wildcard").contains(mappingType);
+    }
+
     public boolean supportsOrdering() {
       return orderingRejectionReason() == null;
     }

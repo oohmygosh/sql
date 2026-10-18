@@ -115,6 +115,34 @@ java -jar "$JAR" --server.port=8080
 
 IDE 可运行 `org.opensearch.sql.example.QueryApplication`，设置相同环境变量，无需程序参数。
 
+## 搜索下推端到端回归
+
+57 项固定用例位于 `src/test/java/org/opensearch/sql/example/e2e/`，覆盖 PPL/SQL 筛选、
+对象字段、投影/改名/eval、排序分页、聚合/HAVING/条件聚合、时间分桶和直方图。
+测试自行启动随机端口的真实 Spring Boot HTTP 服务，在指定 ES 上创建唯一的
+`uq-search-e2e-*` 索引，结束时删除该索引并关闭服务，不使用本地 8080 或业务索引。
+
+配置独立测试 ES 后运行（需要创建/删除测试索引、写入、mapping、PIT 和搜索权限）：
+
+```bash
+export ELASTICSEARCH_TEST_URL=http://localhost:9200
+# 如需认证，另行设置 ELASTICSEARCH_TEST_USERNAME 和 ELASTICSEARCH_TEST_PASSWORD。
+./gradlew :spring-boot-example:test :spring-boot-example:searchE2eTest
+```
+
+`searchE2eTest` 缺少 URL、无法连接或断言失败时会失败；每次显式调用均重新执行，
+不复用 Gradle 缓存。普通 `test` 仅检查用例清单，不连接数据库。CI 的
+`search-pushdown-e2e.yml` 使用独立 Elasticsearch 8.19 服务执行这两个任务。
+
+56 个成功查询会将 HTTP 响应的 schema、行值/顺序、分页/hasNext、时间范围和直方图
+逐项对照禁用下推的本地执行结果；另 1 个用例校验字段作用域错误返回 400。
+计划通过 Calcite hook 从实际 HTTP 执行线程捕获，直接校验 ES 扫描与本地算子，
+区分必须下推、部分下推、必须本地执行和 head/分页边界，直方图还需原生 date_histogram。
+
+JUnit 的每个用例有独立名称。HTML 报告位于
+`build/reports/tests/searchE2eTest/index.html`，请求、实际响应、基准响应和物理计划
+保存在 `build/reports/search-e2e/cases.json`；失败时也会保存，CI 会上传这些诊断产物。
+
 ## 日志
 
 示例使用 Spring Boot 日志 starter 提供的 Logback，配置位于 `src/main/resources/logback-spring.xml`。默认以 `INFO` 级别同时输出到控制台和当前工作目录下的 `log/unified-query-example.log`，包含时间、线程、级别、logger 及异常堆栈。日志按天或单文件达到 `10MB` 滚动，历史文件压缩保存，最多保留 7 天且归档总量不超过 `100MB`。
@@ -178,7 +206,7 @@ curl --fail --request POST 'http://localhost:8080/search' \
 
 相对时间支持 `now`、`now-15m`、`now-1h`、`now-1d`、`now-1w`、`now-1M` 以及按分钟/小时/自然日取整的 `/m`、`/h`、`/d`。绝对时间支持 ISO 时间或按业务时区解释的本地日期/日期时间。前端绝对时间输入要求显式时区。客户端必须将 `resolvedTimeRange` 原样用于翻页、图表刷新和导出；重新搜索才重新解析 `now`。
 
-支持的筛选操作为 `eq/ne/gt/gte/lt/lte/in/is_null/is_not_null/contains`；`in` 使用数组，空值条件不需要 value，其他操作需提供非 null 值。`contains` 是字面字符串包含，用户输入的 `%` / `_` 不解释为 SQL 通配符。
+支持的筛选操作为 `eq/ne/gt/gte/lt/lte/in/is_null/is_not_null/contains`；`in` 使用数组，空值条件不需要 value，其他操作需提供非 null 值。`contains` 与 PPL `contains` 一致，采用 ILIKE 的不区分 ASCII 大小写语义进行字面字符串包含匹配，用户输入的 `%` / `_` 不解释为 SQL 通配符。
 
 外部条件在源数据读取之后、用户原有过滤/计算/聚合之前执行；保留原语句 OR 分组、HAVING 和 PPL stats 后 where 的位置。条件冲突返回空结果。不存在的字段、错误类型、无法明确绑定条件的连接/多分支查询直接报错，不猜测筛选目标。时间字段无需出现在最终投影中。
 
