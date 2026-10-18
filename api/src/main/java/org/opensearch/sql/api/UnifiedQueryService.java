@@ -97,6 +97,7 @@ public final class UnifiedQueryService {
         context.getPlanContext().setHighlightConfig(highlight);
         RelNode plan = new UnifiedQueryPlanner(context).plan(query);
         for (var rule : context.getLangSpec().preCompilationRules()) plan = plan.accept(rule);
+        plan = backend.normalizePlan(plan);
         CompletableFuture<T> result = new CompletableFuture<>();
         ResponseListener<T> listener =
             new ResponseListener<>() {

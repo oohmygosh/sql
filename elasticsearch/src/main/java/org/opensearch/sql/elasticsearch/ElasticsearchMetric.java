@@ -6,6 +6,7 @@
 package org.opensearch.sql.elasticsearch;
 
 import static org.opensearch.sql.elasticsearch.ElasticsearchQueryBackend.object;
+import static org.opensearch.sql.elasticsearch.planner.ElasticsearchExpressionResolver.inputRef;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -26,7 +27,7 @@ import org.apache.calcite.sql.type.SqlTypeName;
 import org.opensearch.sql.elasticsearch.ElasticsearchQueryBackend.Field;
 
 /** A metric whose field access, null behavior and numeric semantics can run in Elasticsearch. */
-final class ElasticsearchMetric {
+public final class ElasticsearchMetric {
   private static final Set<String> STATISTICS =
       Set.of("VAR_SAMP", "VAR_POP", "STDDEV_SAMP", "STDDEV_POP");
   private static final Map<String, Object> ALL = Map.of("match_all", Map.of());
@@ -47,7 +48,7 @@ final class ElasticsearchMetric {
     this.compression = compression;
   }
 
-  static ElasticsearchMetric translate(
+  public static ElasticsearchMetric translate(
       AggregateCall aggregate, List<RexNode> inputs, List<Field> fields, RexBuilder rexBuilder) {
     String name = aggregate.getAggregation().getName().toUpperCase(Locale.ROOT);
     if (aggregate.distinctKeys != null
@@ -87,20 +88,16 @@ final class ElasticsearchMetric {
     if (arguments.isEmpty()) {
       return name.equals("COUNT") ? new ElasticsearchMetric(name, null, filter, null, null) : null;
     }
-    if (name.equals("COUNT")
-        && arguments.size() == 1
-        && !(arguments.getFirst() instanceof RexInputRef)) {
+    if (name.equals("COUNT") && arguments.size() == 1 && inputRef(arguments.getFirst()) == null) {
       Map<String, Object> nonNull = nonNull(arguments.getFirst(), fields, rexBuilder);
       if (nonNull == null) return null;
       return new ElasticsearchMetric(name, null, and(filter, nonNull), null, null);
     }
-    if (!(arguments.getFirst() instanceof RexInputRef ref)) return null;
+    RexInputRef ref = inputRef(arguments.getFirst());
+    if (ref == null) return null;
     Field field = fields.get(ref.getIndex());
-    if (!field.exact() || Set.of("_id", "_score").contains(field.name())) return null;
-    // Local evaluation reads the original source as DOUBLE; these mappings quantize indexed
-    // values. Only presence-based COUNT is independent of that rounding (even cardinality is not).
-    if (!name.equals("COUNT")
-        && Set.of("float", "half_float", "scaled_float").contains(field.mappingType())) return null;
+    if (!(name.equals("COUNT") ? field.supportsExistence() : field.supportsComparison())
+        || Set.of("_id", "_score").contains(field.name())) return null;
     if (name.equals("PERCENTILE_APPROX")) return percentile(arguments, field, filter);
     if (arguments.size() != 1) return null;
     if (Set.of("COUNT", "APPROX_COUNT_DISTINCT", "DISTINCT_COUNT_APPROX").contains(name)) {
@@ -229,9 +226,10 @@ final class ElasticsearchMetric {
   private static Map<String, Object> nonNull(
       RexNode expression, List<Field> fields, RexBuilder rexBuilder) {
     if (expression instanceof RexLiteral literal) return literal.isNull() ? NONE : ALL;
-    if (expression instanceof RexInputRef ref) {
+    RexInputRef ref = inputRef(expression);
+    if (ref != null) {
       Field field = fields.get(ref.getIndex());
-      return field.exact() && !Set.of("_id", "_score").contains(field.name())
+      return field.supportsExistence() && !Set.of("_id", "_score").contains(field.name())
           ? Map.of("exists", Map.of("field", field.name()))
           : null;
     }

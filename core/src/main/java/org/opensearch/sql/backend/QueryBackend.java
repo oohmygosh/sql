@@ -7,6 +7,7 @@ package org.opensearch.sql.backend;
 
 import java.util.List;
 import org.apache.calcite.plan.RelOptRule;
+import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.schema.Schema;
 import org.apache.calcite.schema.SchemaPlus;
 import org.opensearch.sql.executor.ExecutionEngine;
@@ -25,6 +26,11 @@ public interface QueryBackend extends AutoCloseable {
 
   default List<RelOptRule> rules() {
     return List.of();
+  }
+
+  /** Mandatory source-semantic normalization, applied before optional cost-based optimization. */
+  default RelNode normalizePlan(RelNode plan) {
+    return plan;
   }
 
   default boolean supportsHighlight() {

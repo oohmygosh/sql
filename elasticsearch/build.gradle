@@ -9,6 +9,7 @@ plugins {
 }
 dependencies {
     api project(':core')
+    compileOnly 'org.immutables:value-annotations:2.8.8'
     testImplementation project(':api')
     testImplementation testFixtures(project(':api'))
     testImplementation 'org.junit.jupiter:junit-jupiter:5.9.3'

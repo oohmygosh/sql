@@ -5,6 +5,8 @@
 
 package org.opensearch.sql.elasticsearch;
 
+import static org.opensearch.sql.elasticsearch.planner.ElasticsearchExpressionResolver.inputRef;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,10 +24,10 @@ import org.apache.calcite.sql.type.SqlTypeName;
 import org.opensearch.sql.elasticsearch.ElasticsearchQueryBackend.Field;
 
 /** Translates only predicates whose SQL null semantics can be preserved by Elasticsearch. */
-final class ElasticsearchPredicate {
+public final class ElasticsearchPredicate {
   private ElasticsearchPredicate() {}
 
-  static Map<String, Object> translate(RexNode expression, List<Field> fields) {
+  public static Map<String, Object> translate(RexNode expression, List<Field> fields) {
     return translate(expression, fields, true);
   }
 
@@ -44,11 +46,12 @@ final class ElasticsearchPredicate {
               : "match_none",
           Map.of());
     }
-    if (expression instanceof RexInputRef ref) {
-      Field field = fields.get(ref.getIndex());
-      return field.exact()
+    RexInputRef booleanRef = inputRef(expression);
+    if (booleanRef != null) {
+      Field field = fields.get(booleanRef.getIndex());
+      return field.supportsComparison()
               && field.mappingType().equals("boolean")
-              && ref.getType().getSqlTypeName() == SqlTypeName.BOOLEAN
+              && booleanRef.getType().getSqlTypeName() == SqlTypeName.BOOLEAN
           ? Map.of("term", Map.of(field.name(), truth))
           : null;
     }
@@ -95,9 +98,10 @@ final class ElasticsearchPredicate {
           return selected == null ? null : truth != complement ? selected : not(selected);
         case IS_NULL, IS_NOT_NULL, IS_UNKNOWN:
           Map<String, Object> known;
-          if (arg instanceof RexInputRef ref) {
+          RexInputRef ref = inputRef(arg);
+          if (ref != null) {
             Field field = fields.get(ref.getIndex());
-            if (!field.exact() || field.name().equals("_score")) return null;
+            if (!field.supportsExistence() || field.name().equals("_score")) return null;
             known = exists(field);
           } else {
             Map<String, Object> yes = translate(arg, fields, true);
@@ -127,7 +131,7 @@ final class ElasticsearchPredicate {
     if (args.size() != 2) return null;
     RexNode left = args.get(0), right = args.get(1);
     SqlKind kind = call.getKind();
-    if (left instanceof RexLiteral && right instanceof RexInputRef) {
+    if (left instanceof RexLiteral && inputRef(right) != null) {
       RexNode tmp = left;
       left = right;
       right = tmp;
@@ -140,10 +144,9 @@ final class ElasticsearchPredicate {
             default -> kind;
           };
     }
-    if (!(left instanceof RexInputRef ref) || !(right instanceof RexLiteral literal)) return null;
+    RexInputRef ref = inputRef(left);
+    if (ref == null || !(right instanceof RexLiteral literal)) return null;
     Field field = fields.get(ref.getIndex());
-    // An analyzed term is not SQL string equality. Keep such predicates in the shared engine.
-    if (!field.exact() || field.name().equals("_score")) return null;
     if (!Set.of(
             SqlKind.EQUALS,
             SqlKind.NOT_EQUALS,
@@ -154,9 +157,9 @@ final class ElasticsearchPredicate {
         .contains(kind)) return null;
     Object value = literal(literal);
     if (value == null) return Map.of("match_none", Map.of());
-    // These mappings quantize indexed values, while local evaluation reads the original _source
-    // double. Presence is preserved, but neither equality nor ordering is necessarily preserved.
-    if (Set.of("float", "half_float", "scaled_float").contains(field.mappingType())) return null;
+    // NULL comparisons never select rows, even where value comparison cannot be pushed down.
+    // Non-null comparisons must preserve source values, not just indexed-value presence.
+    if (!field.supportsComparison() || field.name().equals("_score")) return null;
     if (!truth) {
       kind =
           switch (kind) {
@@ -188,7 +191,7 @@ final class ElasticsearchPredicate {
     };
   }
 
-  static Map<String, Object> and(List<Map<String, Object>> children) {
+  public static Map<String, Object> and(List<Map<String, Object>> children) {
     return Map.of("bool", Map.of("must", children));
   }
 
@@ -208,11 +211,11 @@ final class ElasticsearchPredicate {
       RexCall call, List<Field> fields, boolean truth, boolean insensitive, boolean like) {
     List<RexNode> args = call.getOperands();
     if (args.size() != 2 && !(like && args.size() == 3)) return null;
-    if (!(args.get(0) instanceof RexInputRef ref) || !(args.get(1) instanceof RexLiteral literal))
-      return null;
+    RexInputRef ref = inputRef(args.get(0));
+    if (ref == null || !(args.get(1) instanceof RexLiteral literal)) return null;
     Field field = fields.get(ref.getIndex());
     // Metadata fields such as _id and analyzed/normalized values do not support these semantics.
-    if (!field.exact()
+    if (!field.supportsComparison()
         || !field.mappingType().equals("keyword")
         || Set.of("_id", "_index", "_score").contains(field.name())) return null;
     if (literal.isNull()) return Map.of("match_none", Map.of());
@@ -364,7 +367,8 @@ final class ElasticsearchPredicate {
   }
 
   private static Object searchValue(RexNode node, List<Field> fields) {
-    if (node instanceof RexInputRef ref) return fields.get(ref.getIndex()).name();
+    RexInputRef ref = inputRef(node);
+    if (ref != null) return fields.get(ref.getIndex()).name();
     if (node instanceof RexLiteral value) return literal(value);
     if (node instanceof RexCall map && map.getKind() == SqlKind.MAP_VALUE_CONSTRUCTOR) {
       Map<String, Object> result = new LinkedHashMap<>();

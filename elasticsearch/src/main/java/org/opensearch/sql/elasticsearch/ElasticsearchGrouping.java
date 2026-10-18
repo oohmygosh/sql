@@ -5,6 +5,8 @@
 
 package org.opensearch.sql.elasticsearch;
 
+import static org.opensearch.sql.elasticsearch.planner.ElasticsearchExpressionResolver.inputRef;
+
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -17,7 +19,7 @@ import org.opensearch.sql.elasticsearch.ElasticsearchQueryBackend.Field;
 import org.opensearch.sql.expression.function.PPLBuiltinOperators;
 
 /** A composite source together with the conversion from its key to the PPL grouping value. */
-final class ElasticsearchGrouping {
+public final class ElasticsearchGrouping {
   private static final String INTEGRAL_SPAN =
       "if (!doc.containsKey(params.field) || doc[params.field].size() == 0) { return null; } "
           + "long value = doc[params.field].value; long width = params.width; "
@@ -31,10 +33,11 @@ final class ElasticsearchGrouping {
     this.binWidth = binWidth;
   }
 
-  static ElasticsearchGrouping translate(RexNode expression, List<Field> fields) {
-    if (expression instanceof RexInputRef ref) {
-      Field field = fields.get(ref.getIndex());
-      if (!field.exact() || List.of("_id", "_score").contains(field.name())) return null;
+  public static ElasticsearchGrouping translate(RexNode expression, List<Field> fields) {
+    RexInputRef direct = inputRef(expression);
+    if (direct != null) {
+      Field field = fields.get(direct.getIndex());
+      if (!field.supportsGrouping() || List.of("_id", "_score").contains(field.name())) return null;
       return new ElasticsearchGrouping(
           Map.of("terms", Map.of("field", field.name(), "missing_bucket", true)), null);
     }
@@ -47,11 +50,13 @@ final class ElasticsearchGrouping {
         || !(call.getOperands().get(1) instanceof RexLiteral width)
         || width.isNull()) return null;
     Field field = fields.get(ref.getIndex());
-    if (!field.exact() || List.of("_id", "_score").contains(field.name())) return null;
     if (span) {
       if (!(call.getOperands().get(2) instanceof RexLiteral unit)) return null;
-      if (!unit.isNull()) return timeSpan(field, width, unit);
+      // Date buckets are at least millisecond-wide. Truncating nanos to local milliseconds
+      // preserves these UTC bucket boundaries, even though direct date_nanos grouping is unsafe.
+      if (!unit.isNull()) return field.supportsExistence() ? timeSpan(field, width, unit) : null;
     }
+    if (!field.supportsGrouping() || List.of("_id", "_score").contains(field.name())) return null;
     if (!SqlTypeName.NUMERIC_TYPES.contains(width.getType().getSqlTypeName())) return null;
     BigDecimal literal = width.getValueAs(BigDecimal.class);
     if (literal == null || literal.signum() <= 0) return null;
