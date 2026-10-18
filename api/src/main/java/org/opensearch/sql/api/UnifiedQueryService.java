@@ -17,6 +17,7 @@ import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.runtime.Hook;
 import org.opensearch.sql.ast.statement.ExplainMode;
 import org.opensearch.sql.backend.QueryBackend;
+import org.opensearch.sql.calcite.plan.rel.EnumerableBackendML;
 import org.opensearch.sql.common.response.ResponseListener;
 import org.opensearch.sql.executor.ExecutionEngine;
 import org.opensearch.sql.executor.QueryCancellation;
@@ -150,7 +151,10 @@ public final class UnifiedQueryService {
       throw new UnsupportedOperationException("Highlight is not supported by " + backend.type());
     try (Hook.Closeable ignored =
         Hook.PLANNER.addThread(
-            (RelOptPlanner planner) -> backend.rules().forEach(planner::addRule))) {
+            (RelOptPlanner planner) -> {
+              backend.rules().forEach(planner::addRule);
+              planner.addRule(EnumerableBackendML.RULE);
+            })) {
       UnifiedQueryContext.Builder builder =
           UnifiedQueryContext.builder()
               .language(request.language())
@@ -163,6 +167,7 @@ public final class UnifiedQueryService {
         builder.setting("plugins.query.size_limit", Integer.MAX_VALUE);
       try (UnifiedQueryContext context = builder.build()) {
         context.getPlanContext().setHighlightConfig(highlight);
+        context.getPlanContext().setMachineLearningProvider(backend.machineLearning());
         RelNode plan = new UnifiedQueryPlanner(context).plan(request);
         boolean unordered = request.window() != null && !QueryExecutionPlan.hasOrdering(plan);
         for (var rule : context.getLangSpec().preCompilationRules()) plan = plan.accept(rule);

@@ -35,6 +35,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -177,6 +178,7 @@ import org.opensearch.sql.calcite.plan.AbstractOpenSearchTable;
 import org.opensearch.sql.calcite.plan.AliasFieldsWrappable;
 import org.opensearch.sql.calcite.plan.HighlightPushDown;
 import org.opensearch.sql.calcite.plan.OpenSearchConstants;
+import org.opensearch.sql.calcite.plan.rel.LogicalBackendML;
 import org.opensearch.sql.calcite.plan.rel.LogicalGraphLookup;
 import org.opensearch.sql.calcite.plan.rel.LogicalSystemLimit;
 import org.opensearch.sql.calcite.plan.rel.LogicalSystemLimit.SystemLimitType;
@@ -3269,7 +3271,17 @@ public class CalciteRelNodeVisitor extends AbstractNodeVisitor<RelNode, CalciteP
 
   @Override
   public RelNode visitML(ML node, CalcitePlanContext context) {
-    throw new CalciteUnsupportedException("ML command is unsupported in Calcite");
+    var provider = context.getMachineLearningProvider();
+    if (provider == null) {
+      throw new CalciteUnsupportedException("ML command is unsupported in Calcite");
+    }
+    visitChildren(node, context);
+    RelNode input = context.relBuilder.build();
+    Map<String, Object> arguments = new LinkedHashMap<>();
+    node.getArguments().forEach((name, value) -> arguments.put(name, value.getValue()));
+    var operation = provider.plan(Collections.unmodifiableMap(arguments), input.getRowType());
+    context.relBuilder.push(new LogicalBackendML(input, operation, arguments));
+    return context.relBuilder.peek();
   }
 
   @Override

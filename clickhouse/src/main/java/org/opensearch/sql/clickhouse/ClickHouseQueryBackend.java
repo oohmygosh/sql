@@ -13,6 +13,7 @@ import javax.sql.DataSource;
 import org.apache.calcite.adapter.jdbc.JdbcSchema;
 import org.apache.calcite.schema.Schema;
 import org.apache.calcite.schema.SchemaPlus;
+import org.opensearch.sql.backend.MachineLearningProvider;
 import org.opensearch.sql.backend.QueryBackend;
 import org.opensearch.sql.executor.CalciteExecutionEngine;
 import org.opensearch.sql.executor.ExecutionEngine;
@@ -74,6 +75,11 @@ public final class ClickHouseQueryBackend implements QueryBackend {
   @Override
   public ExecutionEngine executionEngine() {
     return engine;
+  }
+
+  @Override
+  public MachineLearningProvider machineLearning() {
+    return new ClickHouseMlProvider(dataSource);
   }
 
   @Override

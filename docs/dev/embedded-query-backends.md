@@ -148,8 +148,88 @@ lifetimes.
 * ES provides mapping-driven columns, `_id`, `_index`, `_score`, full-text query functions and optional highlighting. Nested objects are returned as arrays of objects; this does not emulate every native nested-query or parent/child feature. Primitive arrays need an explicit field type declaration, because their array shape is absent from ES mappings.
 * ClickHouse uses JDBC relational pushdown. Unknown PPL UDFs and checked integer aggregates remain in Calcite rather than being sent as nonexistent native functions. Empty aggregate and outer-join null semantics are adapted explicitly.
 * Shared operators handle same-source joins, subqueries, windows and supported PPL expressions when they are not pushed down. Window execution currently stays local for the ClickHouse JDBC convention.
-* Functions requiring OpenSearch plugins (for example node-dependent GeoIP, ML, AD, or vector services) are not automatically available on the other backends. Unsupported functions fail; they are not approximated by unrelated operations.
+* Functions requiring OpenSearch plugins (for example node-dependent GeoIP, AD, or vector services) are not automatically available on the other backends. `ml` has explicit native adapters for the operations listed below; it does not translate OpenSearch K-means/RCF into different algorithms. Unsupported operations fail during planning.
 * This is the current branch's SQL/PPL grammar, not a new ANSI SQL or ClickHouse-native SQL parser. The new backends do not implement the old serialized OpenSearch cursor protocol.
+
+## Native ML queries
+
+The embedded `ml` command executes a capability supplied by the selected backend. It consumes the
+rows produced by preceding PPL commands and appends a prediction column. Subsequent `where`,
+`fields`, `stats`, and sorting operate on those predictions. The default output column is
+`prediction`; `prediction_field='name'` changes it. A name that already exists is rejected.
+`explain` validates the operation and prepares the plan without calling inference or training.
+
+| Backend | Algorithm | Action | Result |
+| --- | --- | --- | --- |
+| Elasticsearch | `regression` | `predict` | Numeric prediction from an existing trained model |
+| Elasticsearch | `classification` | `predict` | Predicted class, represented as a string |
+| ClickHouse | `linear_regression` | `trainandpredict` | Numeric prediction fitted on the input rows |
+| ClickHouse | `logistic_regression` | `trainandpredict` | Probability of class `1`, fitted on the input rows |
+
+### Elasticsearch trained-model inference
+
+```ppl
+source=events
+| where status = 'ready'
+| fields request_size, cpu_usage
+| ml action='predict' algorithm='regression' model_id='latency-model' prediction_field='predicted_latency'
+| where predicted_latency > 1000
+```
+
+Use `algorithm='classification'` to infer class labels instead. Input column names must match the
+model's feature names (use `rename` or `eval` beforehand if needed). The adapter calls
+`POST /_ml/trained_models/{model_id}/_infer`, preserving input order. `batch_size` defaults to 128
+and must be between 1 and 1000. A downstream limit may read ahead and infer more rows than it
+returns; put `head` before `ml` to cap the inference input. Empty input does not call inference.
+Missing models, permissions,
+license errors, per-row inference errors, and incomplete responses fail the query instead of
+producing fabricated predictions. The ES deployment must provide the trained model and the
+license/privileges required by its native API.
+
+The adapter does not create ML jobs or destination indices. Anomaly-detection jobs, forecasts,
+Data Frame Analytics training, ES|QL `CHANGE_POINT`/`CATEGORIZE`, and LLM inference endpoints are
+separate native APIs and are not implicitly invoked by this command.
+
+### ClickHouse inline regression
+
+```ppl
+source=training_samples
+| fields target, x1, x2
+| ml action='trainandpredict' algorithm='linear_regression' target='target' features='x1,x2' learning_rate=0.01
+| fields target, prediction
+```
+
+For binary classification, use `algorithm='logistic_regression'` with a target containing only
+`0` and `1`. The adapter maps those labels to ClickHouse's signed training labels and returns the
+probability of class `1`; a caller can apply its own classification threshold with `eval`/`where`.
+Feature and target columns must contain finite, non-null numeric values. `features` is an explicit
+comma-separated list of distinct input column names and must not include the target.
+
+The adapter executes one native SQL query using `stochasticLinearRegressionState` or
+`stochasticLogisticRegressionState`, followed by `evalMLMethod`. All input rows participate in one
+fit. It does not split training into independent batch models, create tables, or persist models.
+These are **in-sample predictions**, not a held-out accuracy evaluation or a saved-model API.
+Original columns stay in the query process; only row ordinals, targets and features are bound as
+parameters to ClickHouse. SQL identifiers for this intermediate data are generated internally.
+
+Optional training parameters are `learning_rate`, `l2`, `batch_size` (optimizer mini-batch size),
+and `optimizer` (`Adam`, `SGD`, `Momentum`, or `Nesterov`). Defaults are learning rate `0.00001`,
+L2 `0.1`, mini-batch size `1`, and optimizer `Adam`. The adapter deliberately uses a mini-batch
+size of 1: ClickHouse does not apply the gradients of an incomplete final mini-batch. An explicit
+`batch_size` must divide the nonempty input row count; otherwise the query fails before training
+instead of silently ignoring its last samples.
+
+Training materializes a bounded input: `max_rows` defaults to 1000 and may be set from 1 to 10000.
+The adapter also limits retained input to 100,000 cells and expanded SQL to 128 KiB. Exceeding a
+limit fails rather than silently truncating training data. Filter or explicitly limit the input **before** `ml` when
+needed; a `head` after `ml` only limits its output. JDBC resources close on success or failure;
+cancellation is checked while consuming and producing rows. An in-flight native request may take
+until its driver/transport timeout to complete after cancellation.
+
+The existing OpenSearch plugin's V2 `ml`, `kmeans`, and `ad` paths retain their original ML Commons
+behavior. The embedded API does not acquire that V2 path by disabling Calcite. Unsupported
+backend/action/algorithm combinations and unrecognized parameters are rejected; ML is not a
+raw backend SQL or HTTP escape hatch.
 
 ## Adding a backend
 
@@ -172,6 +252,18 @@ CLICKHOUSE_TEST_URL=jdbc:clickhouse://localhost:8123/default ./gradlew :clickhou
 Authenticated test servers can use `ELASTICSEARCH_TEST_USERNAME` / `ELASTICSEARCH_TEST_PASSWORD` and `CLICKHOUSE_TEST_USERNAME` / `CLICKHOUSE_TEST_PASSWORD`. Pass them through the process environment rather than embedding credentials in the URL or source files.
 
 The integration classes are skipped when their endpoint variables are absent. They cover both languages, real pushdown, same-source JOIN, IN subqueries, windows, nulls, exact DISTINCT, result types and ES cross-page document/bucket retrieval. Supply credentials through dedicated test configuration; production credentials do not belong in command-line arguments.
+
+`ClickHouseMlIntegrationTest` also uses `CLICKHOUSE_TEST_URL` to verify native fitting and the full
+PPL pipeline. `ElasticsearchMlIntegrationTest` additionally requires
+`ELASTICSEARCH_ML_TEST_ENABLED=true`: it creates and deletes uniquely named synthetic indices and
+trained-tree models, so the test cluster needs an ML-capable license and permissions for those
+operations. To run just the ML suites with these environment variables configured:
+
+```sh
+./gradlew :clickhouse:test --tests '*ClickHouseMl*' \
+  :elasticsearch:test --tests '*ElasticsearchMl*' \
+  :api:test --tests '*UnifiedQueryMLTest'
+```
 
 The packaged example starts a Web server on port `8080` without application arguments:
 

@@ -3,7 +3,9 @@
 
 The `ml` command applies machine learning (ML) algorithms from the ML Commons plugin to the search results returned by a PPL command. It supports various ML operations, including anomaly detection and clustering. The command can perform train, predict, or combined train-and-predict operations, depending on the algorithm and specified action.
 
-> **Note**: To use the `ml` command, `plugins.calcite.enabled` must be set to `false`.
+> **Engine scope**: The ML Commons algorithms documented below use the OpenSearch plugin's V2 engine (`plugins.calcite.enabled=false` selects it directly). The embedded ES/ClickHouse backends use Calcite and provide separate native `ml` adapters: ES regression/classification inference and ClickHouse linear/logistic regression train-and-predict. See the [embedded native ML guide](../../../dev/embedded-query-backends.md#native-ml-queries) for their supported actions, parameters and limits.
+>
+> Use `action='trainandpredict'` when the query should return prediction fields. `action='train'` returns training status and a model/task ID instead.
 
 The `ml` command supports the following algorithms:
 
@@ -20,7 +22,7 @@ The `ml` command supports different syntax options, depending on the algorithm.
 Use this syntax to detect anomalies in time-series data. This method uses the RCF algorithm optimized for sequential data patterns:
 
 ```syntax
-ml action='train' algorithm='rcf' <number_of_trees> <shingle_size> <sample_size> <output_after> <time_decay> <anomaly_rate> <time_field> <date_format> <time_zone>
+ml action='trainandpredict' algorithm='rcf' <number_of_trees> <shingle_size> <sample_size> <output_after> <time_decay> <anomaly_rate> <time_field> <date_format> <time_zone>
 ```
 
 ### Parameters
@@ -45,7 +47,7 @@ The fixed-in-time RCF algorithm supports the following parameters.
 Use this syntax to detect anomalies in data where the order doesn't matter. This method uses the RCF algorithm optimized for independent data points:
 
 ```syntax
-ml action='train' algorithm='rcf' <number_of_trees> <sample_size> <output_after> <training_data_size> <anomaly_score_threshold>
+ml action='trainandpredict' algorithm='rcf' <number_of_trees> <sample_size> <output_after> <training_data_size> <anomaly_score_threshold>
 ```
 
 ### Parameters
@@ -67,7 +69,7 @@ The batch RCF algorithm supports the following parameters.
 Use this syntax to group data points into clusters based on similarity:
 
 ```syntax
-ml action='train' algorithm='kmeans' <centroids> <iterations> <distance_type>
+ml action='trainandpredict' algorithm='kmeans' <centroids> <iterations> <distance_type>
 ```
 
 ### Parameters
@@ -88,7 +90,7 @@ This example trains an RCF model and uses it to detect anomalies in time-series 
 ```ppl
 source=nyc_taxi
 | fields value, timestamp
-| ml action='train' algorithm='rcf' time_field='timestamp'
+| ml action='trainandpredict' algorithm='rcf' time_field='timestamp'
 | where value=10844.0
 ```
   
@@ -111,7 +113,7 @@ This example trains an RCF model and uses it to detect anomalies in time-series 
 ```ppl
 source=nyc_taxi
 | fields category, value, timestamp
-| ml action='train' algorithm='rcf' time_field='timestamp' category_field='category'
+| ml action='trainandpredict' algorithm='rcf' time_field='timestamp' category_field='category'
 | where value=10844.0 or value=6526.0
 ```
   
@@ -135,7 +137,7 @@ This example trains an RCF model and uses it to detect anomalies in non-time-ser
 ```ppl
 source=nyc_taxi
 | fields value
-| ml action='train' algorithm='rcf'
+| ml action='trainandpredict' algorithm='rcf'
 | where value=10844.0
 ```
   
@@ -158,7 +160,7 @@ This example trains an RCF model and uses it to detect anomalies in non-time-ser
 ```ppl
 source=nyc_taxi
 | fields category, value
-| ml action='train' algorithm='rcf' category_field='category'
+| ml action='trainandpredict' algorithm='rcf' category_field='category'
 | where value=10844.0 or value=6526.0
 ```
   
@@ -182,7 +184,7 @@ This example uses k-means clustering to classify three Iris species (Iris setosa
 ```ppl
 source=iris_data
 | fields sepal_length_in_cm, sepal_width_in_cm, petal_length_in_cm, petal_width_in_cm
-| ml action='train' algorithm='kmeans' centroids=3
+| ml action='trainandpredict' algorithm='kmeans' centroids=3
 ```
   
 The query returns the following results:

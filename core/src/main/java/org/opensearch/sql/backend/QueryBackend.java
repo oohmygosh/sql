@@ -37,6 +37,11 @@ public interface QueryBackend extends AutoCloseable {
     return false;
   }
 
+  /** Native ML operations available to the unified query pipeline, if any. */
+  default MachineLearningProvider machineLearning() {
+    return null;
+  }
+
   ExecutionEngine executionEngine();
 
   @Override

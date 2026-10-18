@@ -30,6 +30,7 @@ import org.apache.http.util.EntityUtils;
 import org.elasticsearch.client.Request;
 import org.elasticsearch.client.ResponseException;
 import org.elasticsearch.client.RestClient;
+import org.opensearch.sql.backend.MachineLearningProvider;
 import org.opensearch.sql.backend.QueryBackend;
 import org.opensearch.sql.executor.CalciteExecutionEngine;
 import org.opensearch.sql.executor.ExecutionEngine;
@@ -105,6 +106,11 @@ public final class ElasticsearchQueryBackend implements QueryBackend {
   @Override
   public ExecutionEngine executionEngine() {
     return engine;
+  }
+
+  @Override
+  public MachineLearningProvider machineLearning() {
+    return new ElasticsearchMlProvider(this);
   }
 
   @Override
