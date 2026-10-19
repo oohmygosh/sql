@@ -169,7 +169,7 @@ public final class ElasticsearchScan extends TableScan implements EnumerableRel,
         .itemIf("aggregation", aggregateBody(), queryPlan.isAggregate())
         .itemIf(
             "grouping",
-            queryPlan.groups().stream().map(ElasticsearchGrouping::source).toList(),
+            ElasticsearchRequestBuilder.groupSources(queryPlan),
             !queryPlan.groups().isEmpty())
         .itemIf("pushdown", "disabled", !pushdownEnabled())
         .itemIf("fieldConstraints", fieldConstraints(), !fieldConstraints().isEmpty());

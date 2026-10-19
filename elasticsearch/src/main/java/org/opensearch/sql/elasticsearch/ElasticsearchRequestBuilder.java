@@ -6,9 +6,11 @@
 package org.opensearch.sql.elasticsearch;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.opensearch.sql.ast.tree.HighlightConfig;
 import org.opensearch.sql.elasticsearch.ElasticsearchQueryBackend.Field;
 
@@ -29,13 +31,9 @@ final class ElasticsearchRequestBuilder {
         request.put("track_total_hits", true);
         request.put("aggs", aggregateBody(plan));
       } else {
-        List<Object> sources = new ArrayList<>();
-        for (int i = 0; i < plan.groups().size(); i++) {
-          sources.add(Map.of("g" + i, plan.groups().get(i).source()));
-        }
         Map<String, Object> composite = new LinkedHashMap<>();
         composite.put("size", PAGE_SIZE);
-        composite.put("sources", sources);
+        composite.put("sources", groupSources(plan));
         if (after != null) composite.put("after", after);
         request.put(
             "aggs", Map.of("groups", Map.of("composite", composite, "aggs", aggregateBody(plan))));
@@ -71,6 +69,22 @@ final class ElasticsearchRequestBuilder {
       if (after != null) request.put("search_after", after);
     }
     return request;
+  }
+
+  static List<Object> groupSources(ElasticsearchQueryPlan plan) {
+    List<Object> sources = new ArrayList<>();
+    Set<Integer> selected = new HashSet<>();
+    if (plan.isAggregate()) {
+      for (var collation : plan.aggregation().bucketOrder()) {
+        int index = collation.getFieldIndex();
+        if (selected.add(index))
+          sources.add(Map.of("g" + index, plan.groups().get(index).source(collation)));
+      }
+    }
+    for (int i = 0; i < plan.groups().size(); i++) {
+      if (selected.add(i)) sources.add(Map.of("g" + i, plan.groups().get(i).source()));
+    }
+    return sources;
   }
 
   static Map<String, Object> aggregateBody(ElasticsearchQueryPlan plan) {

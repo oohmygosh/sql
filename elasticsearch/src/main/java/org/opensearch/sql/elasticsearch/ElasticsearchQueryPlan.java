@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import org.apache.calcite.rel.RelFieldCollation;
 import org.opensearch.sql.ast.tree.HighlightConfig;
 import org.opensearch.sql.elasticsearch.ElasticsearchQueryBackend.Field;
 
@@ -57,11 +58,19 @@ public record ElasticsearchQueryPlan(
     return isAggregate() ? aggregation.metrics() : List.of();
   }
 
-  /** Grouping keys and metrics; empty grouping keys describe a global aggregation. */
-  public record Aggregation(List<ElasticsearchGrouping> groups, List<ElasticsearchMetric> metrics) {
+  /** Grouping output positions stay fixed even when composite sources are reordered for sorting. */
+  public record Aggregation(
+      List<ElasticsearchGrouping> groups,
+      List<ElasticsearchMetric> metrics,
+      List<RelFieldCollation> bucketOrder) {
+    public Aggregation(List<ElasticsearchGrouping> groups, List<ElasticsearchMetric> metrics) {
+      this(groups, metrics, List.of());
+    }
+
     public Aggregation {
       groups = List.copyOf(groups);
       metrics = List.copyOf(metrics);
+      bucketOrder = List.copyOf(bucketOrder);
     }
   }
 

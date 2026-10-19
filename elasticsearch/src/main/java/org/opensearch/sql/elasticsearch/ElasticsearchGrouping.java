@@ -8,8 +8,10 @@ package org.opensearch.sql.elasticsearch;
 import static org.opensearch.sql.elasticsearch.planner.ElasticsearchExpressionResolver.inputRef;
 
 import java.math.BigDecimal;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.apache.calcite.rel.RelFieldCollation;
 import org.apache.calcite.rex.RexCall;
 import org.apache.calcite.rex.RexInputRef;
 import org.apache.calcite.rex.RexLiteral;
@@ -195,8 +197,34 @@ public final class ElasticsearchGrouping {
         null);
   }
 
+  /** Native numeric keys preserve value order; keyword UTF-8 order differs from local UTF-16. */
+  public boolean supportsOrdering(SqlTypeName outputType) {
+    // BIN additionally decodes numeric native keys into string range labels.
+    return binWidth == null
+        && (SqlTypeName.NUMERIC_TYPES.contains(outputType)
+            || SqlTypeName.DATETIME_TYPES.contains(outputType)
+            || outputType == SqlTypeName.BOOLEAN);
+  }
+
   Map<String, Object> source() {
     return source;
+  }
+
+  Map<String, Object> source(RelFieldCollation collation) {
+    var entry = source.entrySet().iterator().next();
+    Map<String, Object> options =
+        new LinkedHashMap<>(ElasticsearchQueryBackend.object(entry.getValue()));
+    options.put("order", collation.direction.isDescending() ? "desc" : "asc");
+    if (Boolean.TRUE.equals(options.get("missing_bucket"))) {
+      var nullDirection =
+          collation.nullDirection == RelFieldCollation.NullDirection.UNSPECIFIED
+              ? collation.direction.defaultNullDirection()
+              : collation.nullDirection;
+      options.put(
+          "missing_order",
+          nullDirection == RelFieldCollation.NullDirection.FIRST ? "first" : "last");
+    }
+    return Map.of(entry.getKey(), Map.copyOf(options));
   }
 
   Object value(Object nativeKey) {

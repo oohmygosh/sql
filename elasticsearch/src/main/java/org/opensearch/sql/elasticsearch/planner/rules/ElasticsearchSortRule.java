@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import org.apache.calcite.plan.RelOptRule;
 import org.apache.calcite.plan.RelOptRuleCall;
+import org.apache.calcite.rel.RelCollations;
 import org.apache.calcite.rel.RelFieldCollation;
 import org.apache.calcite.rel.RelNode;
 import org.apache.calcite.rel.core.Filter;
@@ -43,10 +44,13 @@ final class ElasticsearchSortRule extends RelOptRule {
     Filter filter = throughFilter ? call.rel(1) : null;
     if (filter != null && !RexUtil.isDeterministic(filter.getCondition())) return;
     var plan = scan.queryPlan();
-    if (!scan.pushdownEnabled() || plan.isAggregate() || plan.fetch() != null || plan.offset() != 0)
-      return;
+    if (!scan.pushdownEnabled() || plan.fetch() != null || plan.offset() != 0) return;
     if ((sort.offset != null && !(sort.offset instanceof RexLiteral))
         || (sort.fetch != null && !(sort.fetch instanceof RexLiteral))) return;
+    if (plan.isAggregate()) {
+      pushDownBucketSort(call, sort, scan, filter);
+      return;
+    }
     List<Object> ordering = new ArrayList<>();
     for (var collation : sort.getCollation().getFieldCollations()) {
       Field field = plan.fields().get(collation.getFieldIndex());
@@ -91,6 +95,48 @@ final class ElasticsearchSortRule extends RelOptRule {
         result =
             sort.copy(sort.getTraitSet(), result, sort.getCollation(), sort.offset, sort.fetch);
     }
+    call.transformTo(result);
+  }
+
+  private static void pushDownBucketSort(
+      RelOptRuleCall call, Sort sort, ElasticsearchScan scan, Filter filter) {
+    var plan = scan.queryPlan();
+    List<RelFieldCollation> collations = sort.getCollation().getFieldCollations();
+    if (collations.isEmpty()) return;
+    for (var collation : collations) {
+      // Aggregate outputs contain grouping keys followed by metrics, not source field ordinals.
+      int index = collation.getFieldIndex();
+      if (index >= plan.groups().size()) return;
+      var type = scan.getRowType().getFieldList().get(index).getType().getSqlTypeName();
+      if (!plan.groups().get(index).supportsOrdering(type)
+          || (collation.direction != RelFieldCollation.Direction.ASCENDING
+              && collation.direction != RelFieldCollation.Direction.DESCENDING)) return;
+    }
+    RelNode result =
+        scan.withPlan(
+            scan.getRowType(),
+            scan.getTraitSet().replace(sort.getCollation()),
+            new ElasticsearchQueryPlan(
+                plan.fields(),
+                plan.query(),
+                List.of(),
+                0,
+                null,
+                new ElasticsearchQueryPlan.Aggregation(plan.groups(), plan.metrics(), collations),
+                plan.highlight()));
+    if (filter != null)
+      result =
+          filter.copy(
+              filter.getTraitSet().replace(sort.getCollation()), result, filter.getCondition());
+    // Composite page size is not a global limit. Keep OFFSET/FETCH above all returned buckets.
+    if (sort.offset != null || sort.fetch != null)
+      result =
+          sort.copy(
+              sort.getTraitSet().replace(RelCollations.EMPTY),
+              result,
+              RelCollations.EMPTY,
+              sort.offset,
+              sort.fetch);
     call.transformTo(result);
   }
 }

@@ -7,12 +7,15 @@ package org.opensearch.sql.example.service;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -88,6 +91,78 @@ class SearchPushdownWarningsTest {
           Set.of(),
           SearchPushdownWarnings.localOperators(constants),
           RelOptUtil.toString(constants));
+    }
+  }
+
+  @Test
+  void autoSearchHistogramUsesShanghaiCalendarBucketsWithoutLocalWork() throws Exception {
+    Instant now = Instant.parse("2026-10-24T04:00:00Z");
+    Instant firstBucket = Instant.parse("2026-10-16T16:00:00Z");
+    Instant lastBucket = Instant.parse("2026-10-23T16:00:00Z");
+    try (var fixture =
+        new ElasticsearchPlans(
+            "logevent-2026.10.17",
+            List.of(
+                Map.of("key", Map.of("g0", firstBucket.toEpochMilli()), "doc_count", 2),
+                Map.of("key", Map.of("g0", lastBucket.toEpochMilli()), "doc_count", 1)))) {
+      List<RelNode> plans = new ArrayList<>();
+      SearchResponse response;
+      try (Hook.Closeable ignored =
+          Hook.PLAN_BEFORE_IMPLEMENTATION.addThread((RelRoot root) -> plans.add(root.rel))) {
+        // Search builds SEARCH_TIME_BUCKET via withHistogram, rather than native PPL SPAN.
+        response =
+            fixture
+                .controller(now)
+                .search(
+                    new SearchRequest(
+                        "logs",
+                        QueryType.PPL,
+                        "source=`logevent-*`",
+                        new SearchRequest.TimeRange("timestamp", "now-7d", "now", "Asia/Shanghai"),
+                        List.of(),
+                        new SearchRequest.Page(1, 20),
+                        new SearchRequest.Histogram("auto"),
+                        List.of("histogram")));
+      }
+      assertEquals("ok", response.histogram().status(), response.histogram().reason());
+      assertEquals("1d", response.histogram().interval());
+      assertEquals("Asia/Shanghai", response.histogram().timeZone());
+      assertEquals(Instant.parse("2026-10-17T04:00:00Z"), response.resolvedTimeRange().from());
+      assertEquals(now, response.resolvedTimeRange().to());
+      assertEquals(firstBucket, response.histogram().buckets().getFirst().from());
+      assertEquals(lastBucket, response.histogram().buckets().getLast().from());
+      assertEquals(
+          List.of(2L, 0L, 0L, 0L, 0L, 0L, 0L, 1L),
+          response.histogram().buckets().stream().map(SearchResponse.Bucket::count).toList());
+      assertTrue(incomplete(response).isEmpty(), response.warnings().toString());
+
+      // The first plan validates the source; the final plan executes the independent chart.
+      assertEquals(2, plans.size());
+      RelNode histogram = plans.getLast();
+      String physical = RelOptUtil.toString(histogram);
+      assertTrue(physical.contains("ElasticsearchScan"), physical);
+      assertTrue(physical.contains("date_histogram"), physical);
+      assertFalse(physical.contains("EnumerableSort"), physical);
+      assertEquals(Set.of(), SearchPushdownWarnings.localOperators(histogram), physical);
+
+      assertEquals(1, fixture.searches.size(), fixture.searches.toString());
+      JsonNode search = fixture.searches.getFirst();
+      assertEquals(0, search.path("size").asInt(-1), search.toString());
+      JsonNode sources = search.path("aggs").path("groups").path("composite").path("sources");
+      assertTrue(sources.isArray(), search.toString());
+      assertEquals(1, sources.size(), search.toString());
+      JsonNode dateHistogram = sources.get(0).path("g0").path("date_histogram");
+      assertEquals("timestamp", dateHistogram.path("field").asText(), search.toString());
+      assertEquals("1d", dateHistogram.path("calendar_interval").asText(), search.toString());
+      assertEquals("Asia/Shanghai", dateHistogram.path("time_zone").asText(), search.toString());
+      assertEquals("asc", dateHistogram.path("order").asText(), search.toString());
+      assertFalse(dateHistogram.has("fixed_interval"), search.toString());
+      assertFalse(
+          search.has("sort"), "Bucket ordering must not become document sorting: " + search);
+      assertEquals(
+          List.of("POST /logevent-*/_pit", "POST /_search", "DELETE /_pit"),
+          fixture.executionRequests);
+      assertTrue(fixture.unexpectedRequests.isEmpty(), fixture.unexpectedRequests.toString());
     }
   }
 
@@ -279,37 +354,69 @@ class SearchPushdownWarningsTest {
     }
   }
 
-  /** Metadata-only HTTP: explain must never read documents or execute a backend query. */
+  /** Metadata-only by default; optional native histogram buckets allow full service execution. */
   private static final class ElasticsearchPlans implements AutoCloseable {
     private final HttpServer server;
     private final RestClient client;
     private final UnifiedQueryService queries;
+    private final List<JsonNode> searches = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final List<String> executionRequests =
+        new java.util.concurrent.CopyOnWriteArrayList<>();
     private final List<String> unexpectedRequests =
         new java.util.concurrent.CopyOnWriteArrayList<>();
 
     ElasticsearchPlans() throws Exception {
-      byte[] mapping =
-          """
-          {"events":{"mappings":{"properties":{
-            "id":{"type":"keyword"},"timestamp":{"type":"date"},
-            "message":{"type":"text","fields":{"keyword":{"type":"keyword"},"wc":{"type":"wildcard"}}},
-            "local_message":{"type":"text"},
-            "extracted":{"properties":{"process":{"properties":{"name":{"type":"keyword"}}}}}
-          }}}}
-          """
-              .getBytes(StandardCharsets.UTF_8);
+      this("events", null);
+    }
+
+    ElasticsearchPlans(String index, List<Map<String, Object>> buckets) throws Exception {
+      ObjectMapper mapper = new ObjectMapper();
+      JsonNode mapping =
+          mapper.readTree(
+              """
+              {"%s":{"mappings":{"properties":{
+                "id":{"type":"keyword"},"timestamp":{"type":"date"},
+                "message":{"type":"text","fields":{"keyword":{"type":"keyword"},"wc":{"type":"wildcard"}}},
+                "local_message":{"type":"text"},
+                "extracted":{"properties":{"process":{"properties":{"name":{"type":"keyword"}}}}}
+              }}}}
+              """
+                  .formatted(index));
       server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
       server.createContext(
           "/",
           exchange -> {
             try (exchange) {
-              boolean metadata =
-                  exchange.getRequestMethod().equals("GET")
-                      && exchange.getRequestURI().getPath().endsWith("/_mapping");
-              if (!metadata) unexpectedRequests.add(exchange.getRequestURI().toString());
+              String method = exchange.getRequestMethod();
+              String path = exchange.getRequestURI().getPath();
+              Object response;
+              int status = 200;
+              boolean metadata = method.equals("GET") && path.endsWith("/_mapping");
+              if (!metadata) executionRequests.add(method + " " + path);
+              if (metadata) {
+                response = mapping;
+              } else if (buckets != null && method.equals("POST") && path.endsWith("/_pit")) {
+                response = Map.of("id", "histogram-pit");
+              } else if (buckets != null && method.equals("POST") && path.equals("/_search")) {
+                JsonNode search = mapper.readTree(exchange.getRequestBody());
+                searches.add(search);
+                if (search.path("size").asInt(-1) != 0)
+                  unexpectedRequests.add("Document search instead of native histogram: " + search);
+                response =
+                    Map.of(
+                        "hits", Map.of("hits", List.of()),
+                        "aggregations", Map.of("groups", Map.of("buckets", buckets)));
+              } else if (buckets != null && method.equals("DELETE") && path.equals("/_pit")) {
+                response = Map.of("succeeded", true, "num_freed", 1);
+              } else {
+                unexpectedRequests.add(method + " " + path);
+                status = 400;
+                response = Map.of("error", "Unexpected fixture request");
+              }
+              byte[] json = mapper.writeValueAsBytes(response);
               exchange.getResponseHeaders().set("Content-Type", "application/json");
-              exchange.sendResponseHeaders(metadata ? 200 : 400, mapping.length);
-              exchange.getResponseBody().write(mapping);
+              exchange.sendResponseHeaders(status, json.length);
+              exchange.getResponseBody().write(json);
             }
           });
       server.start();
@@ -321,6 +428,21 @@ class SearchPushdownWarningsTest {
                       "http"))
               .build();
       queries = new UnifiedQueryService(List.of(new ElasticsearchQueryBackend("es", client)), "es");
+    }
+
+    SearchController controller(Instant now) {
+      var properties =
+          new SearchProperties(
+              null, null, null, "Asia/Shanghai", Map.of("logs", "timestamp"), Map.of("logs", "id"));
+      var sources = new UnifiedQueryProperties();
+      sources.setDefaultDataSource("logs");
+      return new SearchController(
+          new SearchService(
+              new UnifiedQueryService(
+                  List.of(new ElasticsearchQueryBackend("logs", client)), "logs"),
+              properties,
+              new SearchTimeResolver(properties, "logs", Clock.fixed(now, ZoneOffset.UTC)),
+              new SearchDefaultOrder(properties, sources)));
     }
 
     RelNode plan(QueryType language, String query) {

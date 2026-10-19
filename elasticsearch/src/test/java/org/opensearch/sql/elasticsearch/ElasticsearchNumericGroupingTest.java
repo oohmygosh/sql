@@ -70,6 +70,8 @@ class ElasticsearchNumericGroupingTest {
       Map<String, Object> terms = object(source(pushed.searches.getFirst(), "g0").get("terms"));
       assertEquals("long", terms.get("value_type"));
       assertEquals(true, terms.get("missing_bucket"));
+      assertEquals("asc", terms.get("order"));
+      assertEquals("first", terms.get("missing_order"));
       Map<String, Object> script = object(terms.get("script"));
       assertEquals("painless", script.get("lang"));
       assertEquals(Map.of("field", "value", "width", 10), script.get("params"));
@@ -122,7 +124,7 @@ class ElasticsearchNumericGroupingTest {
         Fixture local = new Fixture("double", true, documents, List.of())) {
       assertSameQuery(
           " | stats count() as total by span(value, 10) as bucket | sort bucket", pushed, local);
-      assertEquals(histogram(10.0), source(pushed.searches.getFirst(), "g0"));
+      assertEquals(orderedHistogram(10.0), source(pushed.searches.getFirst(), "g0"));
     }
   }
 
@@ -153,7 +155,7 @@ class ElasticsearchNumericGroupingTest {
         Fixture local = new Fixture("integer", true, documents, List.of())) {
       assertSameQuery(
           " | stats count() as total by span(value, 1.5) as bucket | sort bucket", pushed, local);
-      assertEquals(histogram(1.5), source(pushed.searches.getFirst(), "g0"));
+      assertEquals(orderedHistogram(1.5), source(pushed.searches.getFirst(), "g0"));
     }
   }
 
@@ -383,6 +385,22 @@ class ElasticsearchNumericGroupingTest {
   private static Map<String, Object> histogram(double interval) {
     return Map.of(
         "histogram", Map.of("field", "value", "interval", interval, "missing_bucket", true));
+  }
+
+  private static Map<String, Object> orderedHistogram(double interval) {
+    return Map.of(
+        "histogram",
+        Map.of(
+            "field",
+            "value",
+            "interval",
+            interval,
+            "missing_bucket",
+            true,
+            "order",
+            "asc",
+            "missing_order",
+            "first"));
   }
 
   private static Map<String, Object> bucket(Object value, long count) {
