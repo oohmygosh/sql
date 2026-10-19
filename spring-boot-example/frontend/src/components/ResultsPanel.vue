@@ -106,6 +106,14 @@ const number = (row) => (state.page - 1) * state.pageSize + row.index + 1;
         </button>
       </div>
     </div>
+    <div class="result-notices">
+      <p id="elapsed" class="rows-elapsed" role="status" aria-live="polite">
+        明细查询 · {{ state.elapsed }}
+      </p>
+      <div id="query-warning" class="query-warning" role="status" :hidden="!state.warning">
+        <strong>明细查询提示</strong> · {{ state.warning }}
+      </div>
+    </div>
     <div class="results-body">
       <FieldExplorer
         :state="state"

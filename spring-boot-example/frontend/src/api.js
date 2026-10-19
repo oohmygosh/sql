@@ -43,7 +43,7 @@ export async function request(path, { body, signal, blob = false } = {}) {
 export function normalizeResponse(data) {
   if (!data || typeof data !== 'object') throw new Error('搜索响应格式无效。');
   let rows;
-  if (data.rows !== undefined) {
+  if (data.rows != null) {
     const result = data.rows;
     if (!Array.isArray(result?.schema) || !Array.isArray(result?.datarows)
         || result.schema.some(column => !column || typeof column.name !== 'string' || typeof column.type !== 'string')

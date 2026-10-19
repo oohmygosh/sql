@@ -16,8 +16,11 @@ export function freezeContext(context, resolvedTimeRange) {
   };
   return freeze(snapshot);
 }
-export function searchBody(context, number, size, include = ['rows', 'histogram']) {
-  return { ...copyContext(context), page: { number, size }, ...(include.includes('histogram') ? { histogram: { interval: 'auto' } } : {}), include };
+export function searchBody(context, number, size) {
+  return { ...copyContext(context), page: { number, size }, include: ['rows'] };
+}
+export function histogramBody(context) {
+  return { ...copyContext(context), histogram: { interval: 'auto' }, include: ['histogram'] };
 }
 export function validateAbsoluteTimeRange(from, to) {
   const precise = value => {

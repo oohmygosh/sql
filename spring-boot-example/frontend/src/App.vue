@@ -281,9 +281,6 @@ onBeforeUnmount(() => {
             <div id="query-error" class="query-error" role="alert" :hidden="!state.error">
               {{ state.error }}
             </div>
-            <div id="query-warning" class="query-warning" role="status" :hidden="!state.warning">
-              {{ state.warning }}
-            </div>
             <div class="filter-row">
               <Icon class="filter-label" name="filter" />
               <div id="filter-chips">
@@ -307,10 +304,14 @@ onBeforeUnmount(() => {
           <Histogram
             :chart="state.chart"
             :visible="state.chartVisible"
-            :elapsed="state.elapsed"
+            :elapsed="state.chartElapsed"
+            :warning="state.chartWarning"
+            :busy="state.chartBusy"
+            :disabled="state.busy || state.dirty"
             :time-zone="state.timeSettings.timeZone"
             @toggle="state.chartVisible = !state.chartVisible"
             @bucket="workspace.selectBucket"
+            @cancel="workspace.cancelHistogram"
           />
           <ResultsPanel
             :workspace="workspace"

@@ -8,7 +8,7 @@ import {
   toggleColumn,
 } from '../fields.js';
 import { getLogLayout } from '../log-results.js';
-import { copyContext, freezeContext, searchBody } from '../search-context.js';
+import { copyContext, freezeContext, searchBody, histogramBody } from '../search-context.js';
 import { timePresets, toDateTimeInput, validatePickerTimeRange } from '../time-range.js';
 
 const historyKey = 'lens.search.history.v3';
@@ -34,6 +34,9 @@ export function useWorkspace(toast) {
     fieldSearch: '',
     chart: null,
     chartVisible: true,
+    chartBusy: false,
+    chartWarning: '',
+    chartElapsed: '等待时间分布',
     page: 1,
     pageSize: 20,
     pageSizeChoice: '20',
@@ -55,6 +58,8 @@ export function useWorkspace(toast) {
   const configController = new AbortController();
   let requestId = 0,
     controller,
+    histogramId = 0,
+    histogramController,
     disposed = false;
   const sourceConfig = computed(
     () => state.sources.find((item) => item.name === state.source) || {},
@@ -113,11 +118,25 @@ export function useWorkspace(toast) {
       toast('浏览器存储不可用，记录仅在当前页面保留。');
     }
   }
-  function invalidateRequest() {
+  function invalidateRowsRequest() {
     requestId++;
     controller?.abort();
     controller = null;
     state.busy = false;
+  }
+  function invalidateHistogramRequest() {
+    histogramId++;
+    if (histogramController) {
+      histogramController.abort();
+      // A pending refresh may still be showing buckets from an older row query.
+      state.chart = null;
+    }
+    histogramController = null;
+    state.chartBusy = false;
+  }
+  function invalidateRequest() {
+    invalidateRowsRequest();
+    invalidateHistogramRequest();
   }
   function clearResults() {
     Object.assign(state, {
@@ -128,6 +147,8 @@ export function useWorkspace(toast) {
       lastRequest: null,
       lastQueryIdentity: null,
       chart: null,
+      chartWarning: '',
+      chartElapsed: '等待时间分布',
       page: 1,
       hasNext: false,
       dirty: true,
@@ -139,6 +160,7 @@ export function useWorkspace(toast) {
   function conditionsChanged() {
     state.dirty = true;
     invalidateRequest();
+    state.chartElapsed = state.chart ? '条件已修改 · 显示上次时间分布' : '等待时间分布';
   }
   const draftKey = () => `${state.source}:${state.mode}`;
   function saveDraft() {
@@ -287,6 +309,54 @@ export function useWorkspace(toast) {
   function requestedPageSize() {
     return Math.min(state.maxPageSize, Number(state.pageSizeChoice));
   }
+  function warningText(warnings) {
+    return warnings
+      .map((warning) =>
+        typeof warning === 'string'
+          ? warning
+          : [warning.type, warning.reason || warning.message, warning.detail || warning.details]
+              .filter(Boolean)
+              .map(displayValue)
+              .join(' · '),
+      )
+      .join('\n');
+  }
+  async function loadHistogram(context) {
+    const id = histogramId;
+    histogramController = new AbortController();
+    state.chartBusy = true;
+    state.chartWarning = '';
+    state.chartElapsed = '正在查询时间分布…';
+    const started = performance.now();
+    try {
+      const result = normalizeResponse(
+        await request('search', {
+          body: histogramBody(context),
+          signal: histogramController.signal,
+        }),
+      );
+      if (id !== histogramId || disposed) return;
+      if (!result.histogram) throw new Error('服务端未返回时间分布。');
+      state.chart = result.histogram;
+      state.chartWarning = warningText(result.warnings);
+      const status =
+        result.histogram.status === 'ok'
+          ? '时间分布'
+          : result.histogram.status === 'unsupported'
+            ? '当前查询不支持时间分布'
+            : '时间分布查询失败';
+      state.chartElapsed = `${status} · ${Math.round(performance.now() - started)} ms`;
+    } catch (error) {
+      if (id !== histogramId || error.name === 'AbortError' || disposed) return;
+      state.chart = { status: 'error', reason: error.message };
+      state.chartElapsed = '时间分布查询失败';
+    } finally {
+      if (id === histogramId) {
+        histogramController = null;
+        state.chartBusy = false;
+      }
+    }
+  }
   async function runSearch({
     number = 1,
     continuation = false,
@@ -304,8 +374,14 @@ export function useWorkspace(toast) {
     const identity = JSON.stringify(context);
     const preservePosition =
       number === state.page && (continuation || identity === state.lastQueryIdentity);
-    invalidateRequest();
+    invalidateRowsRequest();
+    if (!continuation) {
+      invalidateHistogramRequest();
+      state.chartWarning = '';
+      state.chartElapsed = '等待明细查询确定时间范围…';
+    }
     state.error = '';
+    state.warning = '';
     saveDraft();
     const id = requestId;
     controller = new AbortController();
@@ -315,7 +391,7 @@ export function useWorkspace(toast) {
     try {
       const result = normalizeResponse(
         await request('search', {
-          body: searchBody(context, number, size, continuation ? ['rows'] : ['rows', 'histogram']),
+          body: searchBody(context, number, size),
           signal: controller.signal,
         }),
       );
@@ -352,7 +428,6 @@ export function useWorkspace(toast) {
       });
       if (!continuation) {
         state.lastQueryIdentity = identity;
-        state.chart = result.histogram || { status: 'error', reason: '服务端未返回时间分布。' };
         const item = { ...copyContext(context), at: Date.now() };
         state.history = [
           item,
@@ -363,24 +438,18 @@ export function useWorkspace(toast) {
         ].slice(0, 20);
         persist(historyKey, state.history);
       }
-      state.warning = result.warnings
-        .map((warning) =>
-          typeof warning === 'string'
-            ? warning
-            : [warning.type, warning.reason || warning.message, warning.details]
-                .filter(Boolean)
-                .map(displayValue)
-                .join(' · '),
-        )
-        .join('\n');
+      state.warning = warningText(result.warnings);
       state.elapsed = `${context.source} / ${context.language} · ${Math.round(performance.now() - started)} ms`;
       state.status = '查询服务已连接';
       state.connection = 'ok';
       if (!preservePosition) state.scrollVersion++;
+      // The chart reuses the server-resolved range, while rows and pagination stay available.
+      if (!continuation) void loadHistogram(frozen);
     } catch (error) {
       if (id !== requestId || error.name === 'AbortError' || disposed) return;
       state.error = error.message;
       state.elapsed = state.lastRequest ? '查询失败 · 保留上次结果' : '查询失败';
+      if (!continuation) state.chartElapsed = '时间分布未刷新 · 明细查询失败';
       if (error.status === 0) {
         state.status = '连接失败';
         state.connection = 'error';
@@ -395,7 +464,13 @@ export function useWorkspace(toast) {
   function cancelQuery() {
     invalidateRequest();
     state.elapsed = '已停止等待';
+    state.chartElapsed = '已停止等待时间分布';
     toast('已停止接收结果；服务端查询可能仍在执行。');
+  }
+  function cancelHistogram() {
+    invalidateHistogramRequest();
+    state.chartElapsed = '已停止等待时间分布';
+    toast('已停止接收时间分布；服务端查询可能仍在执行。');
   }
   function refresh() {
     return runSearch({ number: state.dirty ? 1 : state.page });
@@ -442,6 +517,7 @@ export function useWorkspace(toast) {
     }
   }
   function selectBucket(bucket) {
+    if (state.busy || state.chartBusy || state.dirty) return;
     const range = state.lastRequest?.timeRange;
     if (!range) return;
     const from = new Date(Math.max(Date.parse(bucket.from), Date.parse(range.from))).toISOString();
@@ -525,6 +601,7 @@ export function useWorkspace(toast) {
     pickerChanged,
     runSearch,
     cancelQuery,
+    cancelHistogram,
     refresh,
     toggleLogRow,
     selectColumns,

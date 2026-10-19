@@ -1,20 +1,30 @@
 <script setup>
 import { computed } from 'vue';
 import Icon from './Icon.vue';
-const props = defineProps({ chart: Object, visible: Boolean, elapsed: String, timeZone: String });
-const emit = defineEmits(['toggle', 'bucket']);
+const props = defineProps({
+  chart: Object,
+  visible: Boolean,
+  elapsed: String,
+  warning: String,
+  busy: Boolean,
+  disabled: Boolean,
+  timeZone: String,
+});
+const emit = defineEmits(['toggle', 'bucket', 'cancel']);
 const supported = computed(() => props.chart?.status === 'ok');
 const ceiling = computed(() =>
   Math.max(1, ...(props.chart?.buckets || []).map((bucket) => Number(bucket.count))),
 );
 const reason = computed(() =>
-  props.chart
-    ? props.chart.reason ||
-      props.chart.message ||
-      (props.chart.status === 'unsupported'
-        ? '当前查询不支持自动生成时间分布。'
-        : '时间分布执行失败。')
-    : '执行查询后显示时间分布；自动图表需要有限时间范围。',
+  props.busy
+    ? '正在加载时间分布，明细数据可独立浏览。'
+    : props.chart
+      ? props.chart.reason ||
+        props.chart.message ||
+        (props.chart.status === 'unsupported'
+          ? '当前查询不支持自动生成时间分布。'
+          : '时间分布执行失败。')
+      : '执行查询后显示时间分布；自动图表需要有限时间范围。',
 );
 const labels = computed(() => {
   const buckets = props.chart?.buckets || [];
@@ -45,13 +55,21 @@ function formatTime(value) {
 }
 </script>
 <template>
-  <section class="overview-card" aria-label="搜索时间分布">
+  <section class="overview-card" aria-label="搜索时间分布" :aria-busy="busy">
     <div class="overview-top">
-      <span class="query-complete"
-        ><Icon name="check-circle" /><span id="elapsed" role="status" aria-live="polite">{{
-          elapsed
-        }}</span></span
-      ><button
+      <div class="histogram-status">
+        <strong>时间分布</strong>
+        <span id="histogram-elapsed" role="status" aria-live="polite">{{ elapsed }}</span>
+      </div>
+      <button
+        v-if="busy"
+        class="text-button"
+        aria-label="停止加载时间分布"
+        @click="emit('cancel')"
+      >
+        <Icon name="x" />停止加载
+      </button>
+      <button
         class="icon-button"
         :aria-label="visible ? '收起趋势图' : '展开趋势图'"
         :aria-expanded="visible"
@@ -60,15 +78,18 @@ function formatTime(value) {
         <Icon :name="visible ? 'chevron-up' : 'chevron-down'" />
       </button>
     </div>
+    <div id="histogram-warning" class="query-warning" role="status" :hidden="!warning">
+      <strong>时间分布提示</strong> · {{ warning }}
+    </div>
     <p
       id="chart-empty"
       class="chart-empty"
-      :class="{ 'chart-error': chart?.status === 'error' }"
-      :hidden="supported || !visible"
+      :class="{ 'chart-error': !busy && chart?.status === 'error' }"
+      :hidden="(supported && !busy) || !visible"
     >
       {{ reason }}
     </p>
-    <div id="chart-area" :hidden="!supported || !visible">
+    <div id="chart-area" :hidden="!supported || !visible || busy">
       <div class="chart-head">
         <span>查询时间分布</span
         ><span id="chart-granularity">{{
@@ -91,6 +112,7 @@ function formatTime(value) {
             v-for="(bucket, index) in chart?.buckets || []"
             :key="index"
             class="chart-bar"
+            :disabled="busy || disabled"
             :title="`${formatTime(bucket.from)} – ${formatTime(bucket.to)} · ${bucket.count} 条`"
             :aria-label="`查询 ${formatTime(bucket.from)} 至 ${formatTime(bucket.to)}`"
             @click="emit('bucket', bucket)"

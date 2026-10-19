@@ -37,11 +37,13 @@ test('Vue workspace preserves query, exploration, completion, history and export
   );
   Object.assign(globalThis, globals);
   const searches = [],
+    histograms = [],
     exportRequests = [],
     downloads = [],
     completions = [];
   let exportComplete = false,
-    exportExpired = false;
+    exportExpired = false,
+    histogramWarnings = [];
   window.HTMLAnchorElement.prototype.click = function () {
     downloads.push({ href: this.href, download: this.download });
   };
@@ -95,7 +97,22 @@ test('Vue workspace preserves query, exploration, completion, history and export
       });
     }
     assert.ok(url.endsWith('/search'));
-    return new Promise((resolve) => searches.push({ body: JSON.parse(options.body), resolve }));
+    const body = JSON.parse(options.body);
+    if (body.include.length === 1 && body.include[0] === 'histogram') {
+      histograms.push(body);
+      return Response.json({
+        rows: null,
+        page: null,
+        resolvedTimeRange: body.timeRange,
+        histogram: {
+          status: 'ok',
+          interval: '1d',
+          buckets: [{ from: '2026-10-17T00:00:00Z', to: '2026-10-18T00:00:00Z', count: 10 }],
+        },
+        warnings: histogramWarnings,
+      });
+    }
+    return new Promise((resolve) => searches.push({ body, resolve }));
   };
   const $ = (selector) => window.document.querySelector(selector);
   let app;
@@ -129,7 +146,10 @@ test('Vue workspace preserves query, exploration, completion, history and export
   app = createApp(App);
   app.mount($('#app'));
   await settle();
-  function reply(index, { page = 1, value = 'original', empty = false, logs = false } = {}) {
+  function reply(
+    index,
+    { page = 1, value = 'original', empty = false, logs = false, warnings = [] } = {},
+  ) {
     searches[index].resolve(
       Response.json({
         rows: logs
@@ -148,19 +168,23 @@ test('Vue workspace preserves query, exploration, completion, history and export
           : { schema: [{ name: 'message', type: 'string' }], datarows: empty ? [] : [[value]] },
         page: { number: page, size: searches[index].body.page.size, hasNext: true },
         resolvedTimeRange: { from: '2026-10-17T00:00:00Z', to: '2026-10-18T00:00:00Z' },
-        histogram: {
-          status: 'ok',
-          interval: '1d',
-          buckets: [{ from: '2026-10-17T00:00:00Z', to: '2026-10-18T00:00:00Z', count: 10 }],
-        },
+        histogram: null,
+        warnings,
       }),
     );
   }
   assert.equal($('#page-size').value, '20');
   assert.equal($('#page-size option[value="auto"]'), null);
   assert.deepEqual(searches[0].body.page, { number: 1, size: 20 });
+  assert.deepEqual(searches[0].body.include, ['rows']);
+  assert.equal(searches[0].body.histogram, undefined);
+  assert.equal(histograms.length, 0);
   reply(0);
   await settle();
+  assert.equal(histograms.length, 1);
+  assert.deepEqual(histograms[0].include, ['histogram']);
+  assert.deepEqual(histograms[0].histogram, { interval: 'auto' });
+  assert.equal(histograms[0].page, undefined);
   const row = $('#results-rows tr'),
     heading = $('thead tr'),
     bar = $('#histogram button');
@@ -531,7 +555,7 @@ test('Vue workspace preserves query, exploration, completion, history and export
         .at(-1)
         .resolve(
           new Response(
-            '{"rows":{"schema":[{"name":"alias","type":"long"},{"name":"alias","type":"struct"}],"datarows":[[9223372036854775807,{"value":"<img src=x onerror=alert(1)>"}]]},"page":{"number":1,"size":20,"hasNext":false},"resolvedTimeRange":{"from":"2026-10-17T00:00:00Z","to":"2026-10-18T00:00:00Z"},"histogram":{"status":"unsupported","reason":"aggregate"}}',
+            '{"rows":{"schema":[{"name":"alias","type":"long"},{"name":"alias","type":"struct"}],"datarows":[[9223372036854775807,{"value":"<img src=x onerror=alert(1)>"}]]},"page":{"number":1,"size":20,"hasNext":false},"resolvedTimeRange":{"from":"2026-10-17T00:00:00Z","to":"2026-10-18T00:00:00Z"},"histogram":null}',
           ),
         );
       await settle();
@@ -551,4 +575,34 @@ test('Vue workspace preserves query, exploration, completion, history and export
       await closeModal();
     },
   );
+
+  await t.test('row and histogram warnings render in their own status regions', async () => {
+    histogramWarnings = [
+      { type: 'partial', reason: 'Histogram warning', detail: 'Only sampled chart buckets' },
+    ];
+    $('[data-action="refresh"]').click();
+    await nextTick();
+    await finishSearch({
+      value: 'successful rows with chart warning',
+      warnings: [{ type: 'partial', reason: 'Rows warning', detail: 'Only sampled rows' }],
+    });
+    assert.match($('#results-rows').textContent, /successful rows with chart warning/);
+    assert.equal($('#query-warning').hidden, false);
+    assert.match($('#query-warning').textContent, /Rows warning/);
+    assert.match($('#query-warning').textContent, /Only sampled rows/);
+    assert.doesNotMatch($('#query-warning').textContent, /Histogram warning|chart buckets/);
+    assert.ok($('#histogram-warning'));
+    assert.equal($('#histogram-warning').hidden, false);
+    assert.match($('#histogram-warning').textContent, /Histogram warning/);
+    assert.match($('#histogram-warning').textContent, /Only sampled chart buckets/);
+    assert.doesNotMatch($('#histogram-warning').textContent, /Rows warning|sampled rows/);
+
+    histogramWarnings = [];
+    $('[data-action="refresh"]').click();
+    await nextTick();
+    assert.equal($('#query-warning').hidden, true);
+    await finishSearch();
+    assert.equal($('#query-warning').hidden, true);
+    assert.equal($('#histogram-warning').hidden, true);
+  });
 });

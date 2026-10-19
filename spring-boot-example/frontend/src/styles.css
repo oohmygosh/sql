@@ -174,6 +174,8 @@ th{font-size:11px;color:#8794a7}.timestamp{font-size:10px;color:#77869d}.service
 .local-time{display:flex;gap:6px;margin-left:auto;flex:none}.local-time select{max-width:130px;border:0;border-radius:5px;background:#eef2f7;padding:4px 6px;color:#77899f;font-size:10px}
 #filter-chips{flex-wrap:nowrap;overflow:auto;min-width:0}.filter-chip{flex:none}
 .chart-empty{font-size:10px;color:#929eb0;margin:5px 0 1px}.chart-bar .other{background:#a6bddb}.chart-bar{min-width:2px}
+.histogram-status{flex:1;min-width:0;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}.histogram-status strong{font-size:12px;font-weight:550;color:#667181}.histogram-status>span{font-size:10px;color:#929eb0;overflow-wrap:anywhere}
+.result-notices{padding:0 17px}.rows-elapsed{margin:8px 0;font-size:10px;color:#929eb0}.result-notices .query-warning{margin:0 0 10px}
 .table-scroll table{table-layout:auto;width:max-content;min-width:100%}.table-scroll th{max-width:320px;white-space:nowrap}.table-scroll th small,.detail-field small{display:block;font-size:8px;font-weight:400;color:#9aa9ba;margin-top:2px}
 .table-scroll td{max-width:440px;min-width:95px;font:11px var(--mono);color:#63758e}.table-scroll td:first-child{min-width:32px;width:32px}.cell-value{display:block;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.null-value{color:#a9b2bd;font-style:italic}
 .table-scroll th{height:37px}.table-scroll td{height:36px}.field-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}.field-item>span:last-child{flex:none}
