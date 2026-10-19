@@ -9,7 +9,7 @@ updates:
       timezone: "America/Los_Angeles"
     labels:
       - "skip-changelog"
-    group:
+    groups:
       all-dependencies:
         patterns:
           - "*"
