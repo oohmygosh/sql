@@ -12,6 +12,7 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.BiFunction;
 import org.antlr.v4.runtime.Parser;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.atn.ATN;
@@ -59,6 +60,41 @@ final class AntlrCompletionSuggester {
       Set<Integer> preferredRules,
       int maxConfigurations,
       int maxRuleDepth) {
+    return suggest(
+        parser,
+        startRule,
+        tokenTypes,
+        preferredRules,
+        maxConfigurations,
+        maxRuleDepth,
+        (predicate, position) -> null);
+  }
+
+  /** A null predicate result keeps the path but marks the analysis incomplete. */
+  static Analysis suggest(
+      Parser parser,
+      int startRule,
+      List<Integer> tokenTypes,
+      Set<Integer> preferredRules,
+      BiFunction<PredicateTransition, Integer, Boolean> predicates) {
+    return suggest(
+        parser,
+        startRule,
+        tokenTypes,
+        preferredRules,
+        MAX_CONFIGURATIONS,
+        MAX_RULE_DEPTH,
+        predicates);
+  }
+
+  private static Analysis suggest(
+      Parser parser,
+      int startRule,
+      List<Integer> tokenTypes,
+      Set<Integer> preferredRules,
+      int maxConfigurations,
+      int maxRuleDepth,
+      BiFunction<PredicateTransition, Integer, Boolean> predicates) {
     ATN atn = parser.getATN();
     if (startRule < 0 || startRule >= atn.ruleToStartState.length) {
       throw new IllegalArgumentException("Unknown parser start rule: " + startRule);
@@ -132,9 +168,11 @@ final class AntlrCompletionSuggester {
             pending.add(configuration.at(transition.target.stateNumber));
           }
         } else if (transition.isEpsilon()) {
-          // Context-dependent semantic predicates need a language adapter. Do not pretend that
-          // treating one as viable gives an exhaustive, execution-validated completion result.
-          if (transition instanceof PredicateTransition) incomplete = true;
+          if (transition instanceof PredicateTransition predicate) {
+            Boolean viable = predicates.apply(predicate, configuration.position());
+            if (Boolean.FALSE.equals(viable)) continue;
+            if (viable == null) incomplete = true;
+          }
           pending.add(configuration.at(transition.target.stateNumber));
         } else if (atCursor) {
           List<Integer> stack = ruleStack(configuration, state.ruleIndex);

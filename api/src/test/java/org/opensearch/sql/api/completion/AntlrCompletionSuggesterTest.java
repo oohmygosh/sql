@@ -168,6 +168,31 @@ public class AntlrCompletionSuggesterTest {
   }
 
   @Test
+  public void languagePredicatesCanAcceptOrRejectPathsWithoutMarkingThemIncomplete() {
+    ATN atn = singleRule();
+    atn.ruleToStartState[0].addTransition(
+        new PredicateTransition(atn.ruleToStopState[0], 0, 0, true));
+    Parser parser =
+        new OpenSearchPPLParser(
+            new CommonTokenStream(new OpenSearchPPLLexer(CharStreams.fromString("")))) {
+          @Override
+          public ATN getATN() {
+            return atn;
+          }
+        };
+    Analysis accepted =
+        AntlrCompletionSuggester.suggest(
+            parser, 0, List.of(), Set.of(), (predicate, position) -> true);
+    assertEquals(Set.of(Token.EOF), tokenTypes(accepted));
+    assertFalse(accepted.incomplete());
+    Analysis rejected =
+        AntlrCompletionSuggester.suggest(
+            parser, 0, List.of(), Set.of(), (predicate, position) -> false);
+    assertTrue(rejected.tokens().isEmpty());
+    assertFalse(rejected.incomplete());
+  }
+
+  @Test
   public void preferredStartRuleAndExplicitEofArePreserved() {
     Analysis preferred =
         AntlrCompletionSuggester.suggest(

@@ -8,9 +8,11 @@
 
 `GET /ui/config` 仅提供数据源名称、类型、默认表、时间字段/时区及显式配置的源字段，并提供顶层 `maxPageSize`，不暴露连接地址和凭据。默认表为 `logevent-*` / `log_event`，可通过 `ES_TEST_INDEX` / `CLICKHOUSE_TEST_TABLE` 或 `unified-query.ui.default-tables` 覆盖。它们仅用于生成快捷语句；界面没有独立的表名输入框。字段面板区分源字段与结果列/别名，结果别名不能直接生成源字段筛选。
 
-`GET /ui/query/completions` 返回已注册的补全语言，当前为 PPL。`POST /ui/query/completions` 接收 `language、source、text、caret、documentVersion、trigger`，返回带说明和 UTF-16 替换范围的候选。公共补全服务通过 `LanguageCompletionProvider` 注册语言，SQL 接入可复用相同协议和元数据服务；当前 SQL 编辑器不启用补全。
+`GET /ui/query/completions` 返回已注册的补全语言，当前为 PPL 和 SQL。`POST /ui/query/completions` 接收 `language、source、text、caret、documentVersion、trigger`，返回带说明和 UTF-16 替换范围的候选。公共补全服务通过 `LanguageCompletionProvider` 注册语言；PPL 和 SQL 适配器继承 `AbstractCompletionProvider`，复用扫描、UTF-16 光标定位、标识符转义和候选编辑逻辑，分别维护语言语法和字段作用域。
 
 PPL 按位置连续引导 `source/search/index → = → 表/索引 → | → 命令 → 字段/条件`。命令、参数、枚举和函数入口由执行语法的 ANTLR ATN 统一发现；表字段、作用域、动态选项和执行能力由独立语义层补充。表和字段读取当前数据源的 Elasticsearch mapping 或 ClickHouse JDBC 元数据，不执行编辑中的语句，不扫描数据，也不使用上次结果列冒充字段。字段跟随语句中的表，并反映前序管道的投影、重命名、新增字段和聚合输出。表名、字段名由语言适配器转义。
+
+SQL 从同一执行语法推导关键字、函数和续接符号，支持 `SELECT / FROM / JOIN / WHERE / GROUP BY / HAVING / ORDER BY / LIMIT` 的连续补全。投影补全可读取光标后面的 `FROM`；表别名、JOIN 同名字段、派生表投影和 UNION 分支各自绑定作用域。`GROUP BY / HAVING / ORDER BY` 可引用结果别名，`WHERE / ON` 不混入结果别名。动态表函数无法确定字段时保留语法提示并标记不完整。
 
 前端负责 150ms 防抖、取消请求、版本校验、组合输入和候选插入，接受候选后继续请求下一位置。字段元数据短期缓存并隔离数据源和表；失败会显示状态，不影响查询执行。补全不包含实时语法错误诊断。`GET /ui/ppl/grammar` 保留为兼容的 PPL 语法包接口，编辑器不再依赖浏览器解释该语法包。
 

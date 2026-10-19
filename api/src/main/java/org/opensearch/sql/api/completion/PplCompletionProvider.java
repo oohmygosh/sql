@@ -24,7 +24,6 @@ import org.antlr.v4.runtime.Recognizer;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.opensearch.sql.api.completion.CompletionResponse.Item;
-import org.opensearch.sql.api.completion.CompletionResponse.TextEdit;
 import org.opensearch.sql.common.antlr.CaseInsensitiveCharStream;
 import org.opensearch.sql.common.utils.StringUtils;
 import org.opensearch.sql.ppl.antlr.parser.OpenSearchPPLLexer;
@@ -33,7 +32,7 @@ import org.opensearch.sql.ppl.antlr.parser.OpenSearchPPLParser;
 /**
  * PPL editor context and pipeline schema, using the execution grammar without executing a query.
  */
-public final class PplCompletionProvider implements LanguageCompletionProvider {
+public final class PplCompletionProvider extends AbstractCompletionProvider {
   private static final OpenSearchPPLParser GRAMMAR =
       new OpenSearchPPLParser(
           new CommonTokenStream(new OpenSearchPPLLexer(new CaseInsensitiveCharStream(""))));
@@ -77,28 +76,18 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
     return new Session(request, metadata).complete();
   }
 
-  private static final class Session {
-    final CompletionRequest request;
-    final CompletionMetadata metadata;
-    final String text;
-    final int caret;
-    final List<Item> items = new ArrayList<>();
-    final Scan scan;
-    boolean incomplete;
+  private static final class Session extends CompletionSession {
     boolean sourceBoundary;
     final Set<String> constructors = new java.util.HashSet<>();
-    String message = "";
-    Cursor cursor;
     LinkedHashMap<String, Field> fields = new LinkedHashMap<>();
     String sourceAlias;
 
     Session(CompletionRequest request, CompletionMetadata metadata) {
-      this.request = request;
-      this.metadata = metadata;
-      text = request.text();
-      caret = request.caret();
-      scan = scan(text);
-      cursor = cursor(scan, text, caret);
+      this(request, metadata, scan(request.text()));
+    }
+
+    Session(CompletionRequest request, CompletionMetadata metadata, Scan scan) {
+      super(request, metadata, scan, cursor(scan, request.text(), request.caret()));
     }
 
     CompletionResponse complete() {
@@ -159,19 +148,10 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
       return response();
     }
 
+    @Override
     CompletionResponse response() {
-      LinkedHashMap<String, Item> unique = new LinkedHashMap<>();
-      for (Item item : items)
-        unique.putIfAbsent(
-            item.label() + ":" + item.textEdit().from() + ":" + item.textEdit().newText(), item);
       if (!items.isEmpty() && !incomplete && message.equals("输入新的字段名或别名")) message = "";
-      return new CompletionResponse(
-          request.documentVersion(),
-          unique.values().stream()
-              .sorted(Comparator.comparingInt(this::completionPriority))
-              .toList(),
-          incomplete,
-          message);
+      return super.response();
     }
 
     int completionPriority(Item item) {
@@ -497,9 +477,9 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
       if (referenced != null) return referenced.type() == null ? "unknown" : referenced.type();
       if (expression instanceof OpenSearchPPLParser.BinaryArithmeticContext binary) {
         return PplSuggestionContext.family(expressionType(binary.left))
-                    == PplSuggestionContext.ValueFamily.NUMBER
+                    == CompletionTypePolicy.ValueFamily.NUMBER
                 && PplSuggestionContext.family(expressionType(binary.right))
-                    == PplSuggestionContext.ValueFamily.NUMBER
+                    == CompletionTypePolicy.ValueFamily.NUMBER
             ? "number"
             : "unknown";
       }
@@ -510,7 +490,7 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
       if (expression instanceof OpenSearchPPLParser.NestedValueExprContext nested)
         return expressionType(nested.logicalExpression());
       if (expression instanceof OpenSearchPPLParser.EvalFunctionCallContext call)
-        return PplFunctionMetadata.returnType(
+        return CompletionFunctionMetadata.returnType(
             call.evalFunctionName().getText(),
             call.functionArgs().functionArg().stream().map(this::expressionType).toList());
       // The current execution AST visits ANSI datetime literals as their string child. Only an
@@ -571,7 +551,7 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
         }
       }
       String name = call.getText().split("\\(", 2)[0];
-      return PplFunctionMetadata.returnType(name, types);
+      return CompletionFunctionMetadata.returnType(name, types);
     }
 
     void unknownSchema(String reason) {
@@ -1105,12 +1085,12 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
         if (opening > 0
             && label.equals(",")
             && "statsFunction".equals(functionRule)
-            && !PplFunctionMetadata.canAcceptMoreArguments(call, argumentCount)) continue;
+            && !CompletionFunctionMetadata.canAcceptMoreArguments(call, argumentCount)) continue;
         if (label.equals(")")
             && "evalFunctionCall".equals(functionRule)
             && opening > 0
             && before.size() == opening + 1
-            && !PplFunctionMetadata.canCloseWithArguments(call, 0)) continue;
+            && !CompletionFunctionMetadata.canCloseWithArguments(call, 0)) continue;
         if (rules.contains("sortField")
             && Set.of("asc", "desc", "a", "d").contains(label)
             && signedSortField) continue;
@@ -1307,7 +1287,7 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
           (focus != null
                   && focus.predicateRequired
                   && PplSuggestionContext.family(expressionType(focus.tree))
-                      != PplSuggestionContext.ValueFamily.BOOLEAN)
+                      != CompletionTypePolicy.ValueFamily.BOOLEAN)
               || bareAtom
                   && bareReference != null
                   && !localStage.tokens.isEmpty()
@@ -1316,7 +1296,7 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
                   && !context.contains("functionArgs")
                   && !context.contains("functionArgExpression")
                   && PplSuggestionContext.family(bareReference.type())
-                      != PplSuggestionContext.ValueFamily.BOOLEAN;
+                      != CompletionTypePolicy.ValueFamily.BOOLEAN;
       boolean elementFinished =
           !before.isEmpty()
               && (literal(last(before))
@@ -1474,11 +1454,8 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
           if (argument != null
               && argument.getParent() instanceof OpenSearchPPLParser.FunctionArgsContext args
               && args.getParent() instanceof OpenSearchPPLParser.EvalFunctionCallContext call)
-            return org.opensearch.sql.expression.function.PPLFuncImpTable.INSTANCE
-                .requiresArgumentType(
-                    call.evalFunctionName().getText(),
-                    args.functionArg().indexOf(argument),
-                    org.apache.calcite.sql.type.SqlTypeName.BOOLEAN);
+            return CompletionFunctionMetadata.requiresBooleanArgument(
+                call.evalFunctionName().getText(), args.functionArg().indexOf(argument));
           return false;
         }
         if (Set.of(
@@ -1737,7 +1714,7 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
       // A literal dotted name can represent a flattened mapping even when its path has one part.
       List<Field> orderedFields =
           available.stream()
-              .sorted(Comparator.comparingInt(PplCompletionProvider::fieldRank))
+              .sorted(Comparator.comparingInt(AbstractCompletionProvider::fieldRank))
               .toList();
       for (Field field : orderedFields) {
         String label = qualified ? alias + "." + field.name() : field.name();
@@ -1791,69 +1768,14 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
       return caret >= cursor.to && field(value) != null;
     }
 
-    void insertion() {
-      cursor = new Cursor(caret, caret, "");
-    }
-
     void pipe() {
       if (text.substring(caret).stripLeading().startsWith("|")) return;
       symbol("|", "继续处理查询结果", " | ");
-    }
-
-    void keyword(String label, String detail) {
-      add(label, "keyword", detail, label + " ", true);
-    }
-
-    void value(String label, String detail) {
-      add(label, "value", detail, label, false);
-    }
-
-    void symbol(String label, String detail, String inserted) {
-      add(label, "operator", detail, inserted, false);
-    }
-
-    void add(String label, String kind, String detail, String inserted, boolean separate) {
-      if (!label.toLowerCase(Locale.ROOT).startsWith(cursor.prefix.toLowerCase(Locale.ROOT)))
-        return;
-      int from = cursor.from, to = cursor.to;
-      if (from == caret
-          && to == caret
-          && !text.substring(caret).isBlank()
-          && (kind.equals("operator")
-              || Set.of("and", "or", "as", "by", "asc", "desc").contains(label))
-          && scan.visible.stream()
-              .filter(token -> token.start >= caret)
-              .findFirst()
-              .map(token -> token.is(label))
-              .orElse(false)) return;
-      if (from > 0 && Character.isWhitespace(text.charAt(from - 1)) && inserted.startsWith(" "))
-        inserted = inserted.substring(1);
-      if (separate
-          && from > 0
-          && !Character.isWhitespace(text.charAt(from - 1))
-          && text.charAt(from - 1) != '|') inserted = " " + inserted;
-      if (from == to
-          && from > 0
-          && !inserted.isEmpty()
-          && identifierBoundary(text.charAt(from - 1))
-          && identifierBoundary(inserted.charAt(0))) inserted = " " + inserted;
-      if (to < text.length() && Character.isWhitespace(text.charAt(to)) && inserted.endsWith(" "))
-        inserted = inserted.substring(0, inserted.length() - 1);
-      items.add(new Item(label, kind, detail, new TextEdit(from, to, inserted), null));
     }
   }
 
   private static List<String> ruleNames(List<Integer> indices) {
     return indices.stream().map(index -> OpenSearchPPLParser.ruleNames[index]).toList();
-  }
-
-  private static boolean identifierBoundary(char character) {
-    return Character.isLetterOrDigit(character)
-        || character == '_'
-        || character == '@'
-        || character == '`'
-        || character == '\''
-        || character == '"';
   }
 
   private static String nearestFunctionRule(List<String> rules) {
@@ -1926,20 +1848,6 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
         });
   }
 
-  private record Cursor(int from, int to, String prefix) {}
-
-  private record Tok(int type, String text, int start, int end, int channel) {
-    boolean is(String value) {
-      return text.equalsIgnoreCase(value);
-    }
-
-    String lower() {
-      return text.toLowerCase(Locale.ROOT);
-    }
-  }
-
-  private record Scan(List<Tok> all, List<Tok> visible, boolean tooDeep) {}
-
   private record Stage(int start, int end, List<Tok> tokens) {
     String text(String document) {
       return document.substring(start, end);
@@ -1949,95 +1857,11 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
   private record Parsed(ParserRuleContext tree, boolean complete) {}
 
   private static Scan scan(String text) {
-    int[] offsets = offsets(text);
-    OpenSearchPPLLexer lexer = new OpenSearchPPLLexer(new CaseInsensitiveCharStream(text));
-    lexer.removeErrorListeners();
-    List<Tok> all = new ArrayList<>(), visible = new ArrayList<>();
-    int depth = 0;
-    boolean tooDeep = false;
-    for (Token token : lexer.getAllTokens()) {
-      Tok item =
-          new Tok(
-              token.getType(),
-              token.getText(),
-              offsets[token.getStartIndex()],
-              offsets[token.getStopIndex() + 1],
-              token.getChannel());
-      all.add(item);
-      if (token.getChannel() == Token.DEFAULT_CHANNEL) {
-        visible.add(item);
-        if (item.is("(") || item.is("[")) {
-          depth++;
-          if (depth > 64) tooDeep = true;
-        } else if (item.is(")") || item.is("]")) depth = Math.max(0, depth - 1);
-      }
-    }
-    return new Scan(all, visible, tooDeep);
-  }
-
-  private static int[] offsets(String text) {
-    int count = text.codePointCount(0, text.length());
-    int[] result = new int[count + 1];
-    for (int index = 0, position = 0; index < count; index++) {
-      position += Character.charCount(text.codePointAt(position));
-      result[index + 1] = position;
-    }
-    return result;
+    return scan(text, new OpenSearchPPLLexer(new CaseInsensitiveCharStream(text)));
   }
 
   private static Cursor cursor(Scan scan, String text, int caret) {
-    // Scan quotation boundaries too: an unfinished string may be emitted as individual lexer
-    // errors.
-    for (int index = 0; index < text.length(); ) {
-      int start = index;
-      if (text.startsWith("//", index)) {
-        int end = text.indexOf('\n', index + 2);
-        if (end < 0) end = text.length();
-        if (caret > start && caret <= end) return null;
-        index = end;
-      } else if (text.startsWith("/*", index)) {
-        int close = text.indexOf("*/", index + 2);
-        int end = close < 0 ? text.length() : close + 2;
-        if (caret > start && (caret < end || close < 0 && caret == end)) return null;
-        index = end;
-      } else if (text.charAt(index) == '\''
-          || text.charAt(index) == '"'
-          || text.charAt(index) == '`') {
-        char quote = text.charAt(index++);
-        boolean closed = false;
-        while (index < text.length()) {
-          char character = text.charAt(index++);
-          if (character == '\\') {
-            if (index < text.length()) index++;
-          } else if (character == quote) {
-            if (index < text.length() && text.charAt(index) == quote) index++;
-            else {
-              closed = true;
-              break;
-            }
-          }
-        }
-        if (caret > start && (caret < index || !closed && caret == index))
-          return quote == '`'
-              ? new Cursor(start, index, unquote(text.substring(start, caret)))
-              : null;
-        if (quote == '`' && caret == index)
-          return new Cursor(start, index, unquote(text.substring(start, caret)));
-      } else index++;
-      if (index > caret) break;
-    }
-    for (Tok token : scan.visible) {
-      if (token.start <= caret
-          && caret <= token.end
-          && token.start < caret
-          && !literal(token)
-          && !token.text.isEmpty()
-          && (Character.isLetter(token.text.codePointAt(0))
-              || token.text.charAt(0) == '_'
-              || token.text.charAt(0) == '@'))
-        return new Cursor(token.start, token.end, unquote(text.substring(token.start, caret)));
-    }
-    return new Cursor(caret, caret, "");
+    return cursor(scan, text, caret, PplCompletionProvider::literal, List.of("//"));
   }
 
   private static List<Stage> stages(Scan scan, String text, int caret) {
@@ -2167,14 +1991,6 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
     return join(tokens.subList(start, tokens.size()));
   }
 
-  private static boolean identifierToken(Tok token) {
-    return !token.text.isEmpty()
-        && (Character.isLetter(token.text.codePointAt(0))
-            || token.text.startsWith("`")
-            || token.text.startsWith("_")
-            || token.text.startsWith("@"));
-  }
-
   private static boolean literal(Tok token) {
     String name = OpenSearchPPLLexer.VOCABULARY.getSymbolicName(token.type);
     return name != null
@@ -2184,72 +2000,6 @@ public final class PplCompletionProvider implements LanguageCompletionProvider {
         || token.is("true")
         || token.is("false")
         || token.is("null");
-  }
-
-  private static int identifierEnd(Scan scan, int start, int caret) {
-    int end = caret;
-    for (Tok token : scan.visible) {
-      if (token.start < start || token.end <= caret) continue;
-      if (token.start <= end
-          && !Set.of("|", ",", "=", ">", "<", "!=", ">=", "<=", "(", ")", "[", "]")
-              .contains(token.text)) end = token.end;
-      else break;
-    }
-    return end;
-  }
-
-  private static int qualifiedIdentifierEnd(Scan scan, int start, int caret) {
-    int end = caret;
-    boolean afterDot = false;
-    for (Tok token : scan.visible) {
-      if (token.start < start || token.end <= caret) continue;
-      if (token.start > end) break;
-      if (token.start < caret && identifierToken(token)) end = token.end;
-      else if (token.start == end && token.is(".")) {
-        afterDot = true;
-        end = token.end;
-      } else if (token.start == end && afterDot && identifierToken(token)) {
-        afterDot = false;
-        end = token.end;
-      } else break;
-    }
-    return end;
-  }
-
-  private static String quote(String value) {
-    return "`" + value.replace("`", "``") + "`";
-  }
-
-  private static String unquote(String value) {
-    List<String> parts = identifierParts(value);
-    return String.join(".", parts);
-  }
-
-  private static List<String> identifierParts(String value) {
-    List<String> parts = new ArrayList<>();
-    StringBuilder part = new StringBuilder();
-    boolean quoted = false;
-    for (int index = 0; index < value.length(); index++) {
-      char character = value.charAt(index);
-      if (character == '`') {
-        if (quoted && index + 1 < value.length() && value.charAt(index + 1) == '`') {
-          part.append('`');
-          index++;
-        } else quoted = !quoted;
-      } else if (character == '\\' && quoted && index + 1 < value.length())
-        part.append(value.charAt(++index));
-      else if (character == '.' && !quoted) {
-        parts.add(part.toString());
-        part.setLength(0);
-      } else part.append(character);
-    }
-    parts.add(part.toString());
-    return parts;
-  }
-
-  private static int fieldRank(Field field) {
-    if (field.path().size() > 1 || field.name().contains(".")) return 2;
-    return field.name().startsWith("_") ? 1 : 0;
   }
 
   private static String pathKey(List<String> path) {

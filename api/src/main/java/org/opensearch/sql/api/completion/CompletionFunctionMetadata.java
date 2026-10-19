@@ -22,8 +22,8 @@ import org.opensearch.sql.calcite.utils.OpenSearchTypeFactory;
 import org.opensearch.sql.expression.function.PPLBuiltinOperators;
 
 /** Operand counts from the operators used by the planner, rather than a completion-only catalog. */
-final class PplFunctionMetadata {
-  private PplFunctionMetadata() {}
+final class CompletionFunctionMetadata {
+  private CompletionFunctionMetadata() {}
 
   /**
    * Whether another argument can still lead to a valid operator call. The name is the planner's
@@ -44,6 +44,11 @@ final class PplFunctionMetadata {
     return ranges == null
         || ranges.isEmpty()
         || ranges.stream().anyMatch(range -> range.isValidCount(suppliedCount));
+  }
+
+  static boolean requiresBooleanArgument(String name, int index) {
+    return org.opensearch.sql.expression.function.PPLFuncImpTable.INSTANCE.requiresArgumentType(
+        name, index, SqlTypeName.BOOLEAN);
   }
 
   static String returnType(String functionName, List<String> arguments) {

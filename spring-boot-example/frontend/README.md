@@ -44,7 +44,11 @@ npm run dev
 
 ## 上下文补全
 
-编辑器通过 `GET /ui/query/completions` 查询支持的语言，通过同一路径的 `POST` 提交 `{language,source,text,caret,documentVersion,trigger}` 获取当前光标位置的候选。目前启用 PPL，SQL 后续接入同一协议；前端按服务端能力启用提示，没有语言专属的语法判断。语句和光标会发送至查询服务，浏览器不再下载或解释 ANTLR 语法包。
+编辑器通过 `GET /ui/query/completions` 查询支持的语言，通过同一路径的 `POST` 提交 `{language,source,text,caret,documentVersion,trigger}` 获取当前光标位置的候选。目前启用 PPL 和 SQL；前端按服务端能力启用提示，没有语言专属的语法判断。语句和光标会发送至查询服务，浏览器不再下载或解释 ANTLR 语法包。
+
+SQL 支持语法驱动的关键字、函数、表和字段补全，投影字段可使用光标后 `FROM` 的真实结构；支持表别名、JOIN 同名字段限定、派生表投影、UNION 分支及分组/排序结果别名。两种语言复用后端 `AbstractCompletionProvider` 的扫描和文本编辑实现，浏览器直接应用服务端编辑，不区分语法。
+
+SQL 和 PPL 共用 `CompletionTypePolicy` 的类型分类及运算符约束，以及 `CompletionFunctionMetadata` 的执行器函数签名。语言适配器分别识别当前语法位置和字段作用域。varchar 等文本字段在条件位置不提示算术、大小比较或 BETWEEN；数值字段只在值表达式中保留算术；条件完成后提示逻辑连接和后续子句。未知/复合字段只提示空值判断，未知类型明确标记信息不完整。输入前缀不能绕过类型约束。CAST、可推导的函数返回类型和派生表输出会继续参与类型过滤。SQL 多 token 比较符由执行语法组合为 `!= / <> / >= / <=` 的完整编辑。
 
 输入、聚焦空编辑器或移动光标后以 150ms 防抖更新建议，`Ctrl+Space` 可手动触发，方向键选择、`Enter/Tab` 插入、`Escape` 关闭，也可点击候选；`⌘/Ctrl+Enter` 仍执行查询。接受候选后立即请求下一步，例如 `source` → `=` → 真实表 / 索引 → `|` → 命令 → 字段 → 运算符。候选显示用途或字段类型说明。
 
@@ -81,6 +85,7 @@ npm run dev
 - `PplContinuationCoverageTest` 对每个支持的管道命令执行完整流程：选候选、应用真实 `textEdit/caretOffset`、检查下一步、解析最终语句，再接下一管道；自由输入值和新名字单独标记。重点嵌套与可选规则的有限路径直接从 ATN 枚举，缺少完整流程或明确排除理由时失败。这是明确范围的分支门禁，不宣称穷举无限嵌套及所有组合。
 - `PplGuidanceTest` 对各类位置同时断言必须出现和不得出现的类别/词条，并沿实际接受流程验证条件、列表、参数、嵌套函数、别名、关联表和子查询。连续流程测试的每一步还检查小型测试表不会触发超大默认菜单，选中参数名后下一步只能是等号。
 - `PplFilterRegressionTest` 覆盖过滤与文本编辑风险，包括嵌套调用、函数内部关键字、重复参数作用域、空格分隔、前缀歧义和光标中间替换。
+- `SqlOperatorGuidanceTest` 同时断言应出现和不得出现的候选，覆盖文本、数值、布尔、时间、未知/复合类型，以及条件/值表达式、前缀、CAST、函数、派生表和比较完成后的续接。`SqlScopeCompletionTest` 接受真实编辑后执行 SQL，验证类型过滤不会破坏可执行路径。
 - `PplOperatorGuidanceTest` 验证数值、文本、布尔、时间、复合/未知类型的运算符，包含父字段替换为具体字段、别名、括号和空值判断的完整流程。算术在数值计算位置保留；基础算术、显式 CAST 和布尔表达式会向后续管道传播已知类型，其他无法确定的类型保持未知。
 - `PplOperatorJourneyTest` 使用同一份可执行表 Schema 获取真实元数据并执行查询，覆盖字符串、整数、DECIMAL、布尔、DATE/TIME/TIMESTAMP、ROW/MAP、数组和 ANY。条件位置、计算/函数参数、投影别名和聚合输出都校验运算符的出现与排除；接受真实编辑后继续请求，完整走完每个默认比较运算符，以及括号/NOT、CASE/IF、count(eval)、reset 前后和下一管道，校验执行结果。无法从运行时元数据确定的函数结果保持未知类型。
 - `PplSourceBoundaryTest` 同时验证应出现与不应出现的候选：来源完成后严格只有管道/合法子查询闭合，不得提前查询字段；显式开启高级分支和进入字段位置后再正常补全。
@@ -89,6 +94,19 @@ npm run dev
 前端另测连续接受、已有括号与光标后内容、选择事件和过期响应；这些使用响应 fixture 的协议测试不能替代后端真实候选测试。接受建议后的同位置 `select` 事件不会取消正在进行的下一步请求。
 
 组合输入期间暂停提示；输入、切换语言或来源、关闭建议时中止旧请求，并检查文档版本、完整上下文与焦点，避免旧表字段覆盖新提示。元数据部分不可用时保留可用候选并显示原因，接口失败会显示可重试状态，不影响查询执行。前端交互回归执行 `npm test`，生产构建执行 `npm run build`。
+
+## 浏览器端到端测试
+
+先启动最新后端，并确保至少一个数据源的真实表可读；本机需安装 Google Chrome。测试使用 Playwright 启动 5175 端口的真实 Vite 页面，向 Spring Boot 请求候选并执行 SQL，不拦截或模拟业务接口。
+
+```bash
+npm ci
+QUERY_API_TARGET=http://127.0.0.1:8080 npm run test:e2e
+# 可选：选择其他数据源及其真实表
+COMPLETION_E2E_SOURCE=analytics COMPLETION_E2E_TABLE=log_event npm run test:e2e
+```
+
+默认从 `/ui/config` 的数据源和实时元数据中选择表及字段；SQL 能力未启用、没有真实表或字段时直接失败。覆盖连续接受到真实查询执行、Enter/Tab/Escape、UTF-16 光标中间替换、保留后续 FROM 和已有函数括号、别名字段，以及 SQL/PPL 切换。SQL 作用域回归另覆盖早期 JOIN ON 排除后续关系、嵌套 ORDER BY 不向外层 WHERE 暴露结果别名、计算投影的原始列名、相关子查询与派生表隔离，以及限定名称中的空白和换行。失败时在 `test-results/` 保存截图和 trace，HTML 报告位于 `playwright-report/`。
 
 ## 导出
 

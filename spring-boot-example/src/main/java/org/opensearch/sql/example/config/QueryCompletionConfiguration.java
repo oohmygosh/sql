@@ -12,6 +12,7 @@ import org.opensearch.sql.api.completion.LanguageCompletionProvider;
 import org.opensearch.sql.api.completion.PplCompletionProvider;
 import org.opensearch.sql.api.completion.QueryCompletionService;
 import org.opensearch.sql.api.completion.QueryMetadataService;
+import org.opensearch.sql.api.completion.SqlCompletionProvider;
 import org.opensearch.sql.spring.ConfiguredQueryBackends;
 import org.opensearch.sql.spring.UnifiedQueryProperties;
 import org.springframework.boot.context.properties.bind.Bindable;
@@ -38,6 +39,11 @@ public class QueryCompletionConfiguration {
   @Bean
   PplCompletionProvider pplCompletionProvider() {
     return new PplCompletionProvider();
+  }
+
+  @Bean
+  SqlCompletionProvider sqlCompletionProvider() {
+    return new SqlCompletionProvider();
   }
 
   @Bean
