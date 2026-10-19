@@ -29,7 +29,7 @@ const { state, sourceFields } = workspace;
 const exportManager = useExport({ persist: workspace.persist, toast });
 const exportLabel = computed(() =>
   exportManager.state.task
-    ? `导出 · ${{ PENDING: '排队', RUNNING: '运行中', SUCCEEDED: '已完成', FAILED: '失败', CANCELLED: '已取消' }[exportManager.state.task.state] || exportManager.state.task.state}`
+    ? `导出 · ${{ PENDING: '排队', RUNNING: '运行中', SUCCEEDED: '已完成', FAILED: '失败', CANCELLED: '已取消', EXPIRED: '已过期', UNAVAILABLE: '无法访问' }[exportManager.state.task.state] || exportManager.state.task.state}`
     : '',
 );
 const modalTitle = computed(
@@ -383,7 +383,7 @@ onBeforeUnmount(() => {
         </p></template
       >
       <p v-else-if="ui.modal === 'export-status'" class="modal-note">
-        任务由当前示例服务保留；刷新页面可继续查看。暂停刷新不会取消服务端任务。
+        任务和文件由当前示例服务临时保留，过期后自动清理；刷新页面可继续查看保留期内的任务。暂停刷新不会取消服务端任务。
       </p>
       <ExportProgress
         v-if="ui.modal === 'export' || ui.modal === 'export-status'"

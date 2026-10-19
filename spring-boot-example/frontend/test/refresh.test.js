@@ -40,7 +40,8 @@ test('Vue workspace preserves query, exploration, completion, history and export
     exportRequests = [],
     downloads = [],
     completions = [];
-  let exportComplete = false;
+  let exportComplete = false,
+    exportExpired = false;
   window.HTMLAnchorElement.prototype.click = function () {
     downloads.push({ href: this.href, download: this.download });
   };
@@ -85,6 +86,7 @@ test('Vue workspace preserves query, exploration, completion, history and export
       if (url.endsWith('/search/export/tasks')) return Response.json({ id: 'export-1' });
       if (url.endsWith('/search/export'))
         return new Response('message\noriginal\n', { headers: { 'Content-Type': 'text/csv' } });
+      if (exportExpired) return Response.json({ error: 'Export not found' }, { status: 404 });
       return Response.json({
         id: 'export-1',
         state: exportComplete ? 'SUCCEEDED' : 'RUNNING',
@@ -494,6 +496,31 @@ test('Vue workspace preserves query, exploration, completion, history and export
       await closeModal();
     },
   );
+
+  await t.test('cleaned export files show expiration and allow a new export', async () => {
+    exportExpired = true;
+    $('#export-status-button').click();
+    await settle();
+    assert.match($('#export-task').textContent, /文件已过期/);
+    assert.match($('#export-task').textContent, /导出文件已过期或被清理，请重新创建导出/);
+    assert.doesNotMatch($('#export-task').textContent, /导出失败|HTTP 404/);
+    assert.equal($('#export-task .query-error'), null);
+    assert.equal($('#export-task a'), null);
+    assert.equal($('#pause-export'), null);
+    assert.match($('#export-status-button').textContent, /已过期/);
+    assert.equal(JSON.parse(localStorage.getItem('lens.search.export.v2')).state, 'EXPIRED');
+    await closeModal();
+    $('[data-action="export"]').click();
+    await nextTick();
+    assert.equal($('#async-export').disabled, false);
+    exportExpired = false;
+    $('#async-export').click();
+    await settle();
+    assert.match($('#export-task').textContent, /导出完成/);
+    assert.doesNotMatch($('#export-task').textContent, /文件已过期/);
+    assert.ok($('#export-task a'));
+    await closeModal();
+  });
 
   await t.test(
     'duplicate columns, nested values, exact large numbers and HTML text survive details and JSON',

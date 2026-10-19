@@ -54,14 +54,16 @@ export function useExport({ persist, toast }) {
       else toast(`导出${status.state === 'SUCCEEDED' ? '完成，可下载 CSV' : '已结束，请查看状态'}`);
     } catch (error) {
       if (disposed || current !== version || error.name === 'AbortError') return;
-      state.task = { ...state.task, pollError: error.message };
       if ([403, 404].includes(error.status)) {
         state.task = {
           ...state.task,
-          state: 'FAILED',
-          error: '任务已过期、不可访问或服务已重启，请重新创建。',
+          state: error.status === 404 ? 'EXPIRED' : 'UNAVAILABLE',
+          error: error.status === 403 ? '无权访问此导出任务，请切换账号或重新创建导出。' : null,
+          pollError: null,
         };
         persist(exportKey, state.task);
+      } else {
+        state.task = { ...state.task, pollError: error.message };
       }
     }
   }
@@ -105,7 +107,7 @@ export function useExport({ persist, toast }) {
       if (
         task &&
         typeof task.id === 'string' &&
-        ['PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED'].includes(task.state)
+        ['PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'EXPIRED', 'UNAVAILABLE'].includes(task.state)
       ) {
         state.task = task;
         poll();
