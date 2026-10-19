@@ -28,6 +28,12 @@ final class QueryClickHouseDialect extends ClickHouseSqlDialect {
   }
 
   @Override
+  public CalendarPolicy getCalendarPolicy() {
+    // The datasource supplies Calcite's epoch values directly, without JDBC Calendar shifts.
+    return CalendarPolicy.DIRECT;
+  }
+
+  @Override
   public void quoteStringLiteral(StringBuilder buffer, String charsetName, String value) {
     // ClickHouse strings are UTF-8 and do not accept SQL charset introducers such as _UTF-8.
     super.quoteStringLiteral(buffer, null, value);
@@ -108,7 +114,7 @@ final class QueryClickHouseDialect extends ClickHouseSqlDialect {
             ", " + seconds + "), INTERVAL 1 " + unit + ", 'UTC'), " + -seconds + "), 'UTC')");
         return;
       }
-      // JDBC exposes calendar fields; return UTC wall-clock values for Calcite's UTC timestamps.
+      // Keep the bucket's SQL type in UTC; the datasource preserves its epoch value on read.
       writer.print("toTimeZone(toStartOfInterval(");
       call.operand(0).unparse(writer, 0, 0);
       writer.print(", INTERVAL 1 " + unit + ", ");

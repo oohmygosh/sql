@@ -12,7 +12,10 @@ import static org.mockito.Mockito.*;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
+import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -27,6 +30,67 @@ import org.opensearch.sql.executor.QueryType;
 
 /** Exercises emitted SQL and public JDBC metadata without modifying any live database. */
 class ClickHouseAdapterRegressionTest {
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.EnumSource(QueryType.class)
+  void timestampReadsPreserveTheOffsetBeforeCalciteConversion(QueryType language) throws Exception {
+    DataSource source = source();
+    Connection connection = source.getConnection();
+    DatabaseMetaData database = connection.getMetaData();
+    when(database.getColumns(any(), any(), any(), any()))
+        .thenAnswer(
+            invocation ->
+                rows(
+                    new Object[][] {
+                      {
+                        null,
+                        null,
+                        null,
+                        "ts",
+                        Types.TIMESTAMP,
+                        "Nullable(DateTime64(3,'Asia/Shanghai'))",
+                        23,
+                        null,
+                        3,
+                        null,
+                        DatabaseMetaData.columnNullable
+                      }
+                    }));
+    var statement = mock(java.sql.Statement.class);
+    var result = mock(ResultSet.class);
+    var metadata = mock(java.sql.ResultSetMetaData.class);
+    when(connection.createStatement()).thenReturn(statement);
+    when(statement.execute(anyString())).thenReturn(true);
+    when(statement.getResultSet()).thenReturn(result);
+    when(result.getStatement()).thenReturn(statement);
+    when(statement.getConnection()).thenReturn(connection);
+    when(result.getMetaData()).thenReturn(metadata);
+    when(metadata.getColumnCount()).thenReturn(1);
+    when(metadata.getColumnType(1)).thenReturn(Types.TIMESTAMP);
+    AtomicInteger cursor = new AtomicInteger(-1);
+    when(result.next()).thenAnswer(invocation -> cursor.incrementAndGet() < 2);
+    when(result.wasNull()).thenAnswer(invocation -> cursor.get() == 1);
+    OffsetDateTime value = OffsetDateTime.parse("2026-10-19T10:12:46.415+08:00");
+    when(result.getObject(1, OffsetDateTime.class))
+        .thenAnswer(invocation -> cursor.get() == 0 ? value : null);
+    // Reproduce the driver's offset loss rather than supplying an already-correct Timestamp.
+    when(result.getTimestamp(1))
+        .thenAnswer(
+            invocation -> cursor.get() == 0 ? Timestamp.valueOf(value.toLocalDateTime()) : null);
+    var service =
+        new UnifiedQueryService(List.of(new ClickHouseQueryBackend("ch", source, "default")), "ch");
+    String query =
+        language == QueryType.SQL ? "SELECT ts FROM events" : "source=events | fields ts";
+    var results = service.execute(language, query).getResults();
+    assertEquals(2, results.size());
+    assertEquals(
+        Instant.parse("2026-10-19T02:12:46.415Z"),
+        results.getFirst().keyValue("ts").timestampValue());
+    assertEquals("2026-10-19 02:12:46.415", results.getFirst().keyValue("ts").value());
+    assertTrue(results.get(1).keyValue("ts").isNull());
+    verify(result).close();
+    verify(statement).close();
+  }
+
   @Test
   void unicodeStringsUseNativeClickHouseQuoting() {
     String sql =

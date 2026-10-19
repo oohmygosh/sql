@@ -8,14 +8,13 @@ package org.opensearch.sql.executor;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Calendar;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TimeZone;
 import org.apache.calcite.rel.type.RelDataType;
 import org.apache.calcite.rel.type.RelDataTypeField;
 import org.apache.calcite.sql.type.SqlTypeName;
@@ -43,7 +42,7 @@ public class CalciteResultSetBuilder {
     this.preserveNativeTypes = preserveNativeTypes;
   }
 
-  protected Object convertScalar(Object value, RelDataType type) throws SQLException {
+  protected Object convertScalar(Object value, RelDataType type) {
     return value;
   }
 
@@ -57,51 +56,59 @@ public class CalciteResultSetBuilder {
    */
   @SuppressWarnings("unchecked")
   protected Object processValue(Object value, RelDataType type) throws SQLException {
-    if (value == null) {
-      return null;
-    }
-    if (preserveNativeTypes && value instanceof java.math.BigDecimal decimal)
-      return new org.opensearch.sql.data.model.ExprDecimalValue(decimal);
-    if (preserveNativeTypes && value instanceof java.math.BigInteger integer)
-      return new org.opensearch.sql.data.model.ExprDecimalValue(new java.math.BigDecimal(integer));
-    if (value instanceof java.sql.Array array) {
-      try {
-        return processValue(java.util.Arrays.asList((Object[]) array.getArray()), type);
-      } finally {
-        array.free();
+    switch (value) {
+      case null -> {
+        return null;
       }
-    }
-    if (value instanceof Map) {
-      Map<String, Object> map = (Map<String, Object>) value;
-      Map<String, Object> convertedMap = new HashMap<>();
-      for (Map.Entry<String, Object> entry : map.entrySet()) {
-        convertedMap.put(entry.getKey(), processValue(entry.getValue(), null));
+      case java.math.BigDecimal decimal when preserveNativeTypes -> {
+        return new org.opensearch.sql.data.model.ExprDecimalValue(decimal);
       }
-      return convertedMap;
-    }
-    if (value instanceof java.sql.Struct structImpl) {
-      Object[] attrs = structImpl.getAttributes();
-      if (type != null && type.getSqlTypeName() == SqlTypeName.ROW) {
-        List<RelDataTypeField> fields = type.getFieldList();
-        Map<String, Object> map = new LinkedHashMap<>();
-        for (int i = 0; i < fields.size() && i < attrs.length; i++) {
-          map.put(fields.get(i).getName(), processValue(attrs[i], fields.get(i).getType()));
+      case java.math.BigInteger integer when preserveNativeTypes -> {
+        return new org.opensearch.sql.data.model.ExprDecimalValue(
+            new java.math.BigDecimal(integer));
+      }
+      case java.sql.Array array -> {
+        try {
+          return processValue(Arrays.asList((Object[]) array.getArray()), type);
+        } finally {
+          array.free();
         }
-        return map;
       }
-      return Arrays.asList(attrs);
-    }
-    if (value instanceof List) {
-      List<Object> list = (List<Object>) value;
-      RelDataType componentType =
-          (type != null && type.getComponentType() != null) ? type.getComponentType() : null;
-      List<Object> convertedList = new ArrayList<>();
-      for (Object item : list) {
-        convertedList.add(processValue(item, componentType));
+      case Map<?,?> ignored -> {
+        Map<String, Object> map = (Map<String, Object>) value;
+        Map<String, Object> convertedMap = new HashMap<>();
+        for (Map.Entry<String, Object> entry : map.entrySet()) {
+          convertedMap.put(entry.getKey(), processValue(entry.getValue(), null));
+        }
+        return convertedMap;
       }
-      return convertedList;
+      case java.sql.Struct structImpl -> {
+        Object[] attrs = structImpl.getAttributes();
+        if (type != null && type.getSqlTypeName() == SqlTypeName.ROW) {
+          List<RelDataTypeField> fields = type.getFieldList();
+          Map<String, Object> map = new LinkedHashMap<>();
+          for (int i = 0; i < fields.size() && i < attrs.length; i++) {
+            map.put(fields.get(i).getName(), processValue(attrs[i], fields.get(i).getType()));
+          }
+          return map;
+        }
+        return Arrays.asList(attrs);
+      }
+      case List<?> ignored -> {
+        List<Object> list = (List<Object>) value;
+        RelDataType componentType =
+            (type != null && type.getComponentType() != null) ? type.getComponentType() : null;
+        List<Object> convertedList = new ArrayList<>();
+        for (Object item : list) {
+          convertedList.add(processValue(item, componentType));
+        }
+        return convertedList;
+      }
+      case Object[] array -> {
+        return processValue(Arrays.asList(array), type);
+      }
+      default -> {}
     }
-    if (value instanceof Object[] array) return processValue(Arrays.asList(array), type);
     // For other types, return as-is
     return convertScalar(value, type);
   }
@@ -113,10 +120,9 @@ public class CalciteResultSetBuilder {
     List<RelDataType> fieldTypes =
         rowTypes.getFieldList().stream().map(RelDataTypeField::getType).toList();
     List<ExprValue> values = new ArrayList<>();
-    var utcCalendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
     // Iterate through the ResultSet
     while (resultSet.next() && (querySizeLimit == null || values.size() < querySizeLimit)) {
-      values.add(readRow(resultSet, fieldTypes, metaData, utcCalendar));
+      values.add(readRow(resultSet, fieldTypes, metaData));
     }
 
     List<Column> columns =
@@ -161,9 +167,8 @@ public class CalciteResultSetBuilder {
     ResultSetMetaData metadata = resultSet.getMetaData();
     List<RelDataType> types =
         rowTypes.getFieldList().stream().map(RelDataTypeField::getType).toList();
-    var calendar = Calendar.getInstance(TimeZone.getTimeZone("UTC"));
     cancellation.check();
-    ExprValue first = resultSet.next() ? readRow(resultSet, types, metadata, calendar) : null;
+    ExprValue first = resultSet.next() ? readRow(resultSet, types, metadata) : null;
     cancellation.check();
     consumer.schema(new Schema(columns(metadata, types, first)));
     cancellation.check();
@@ -172,23 +177,25 @@ public class CalciteResultSetBuilder {
       cancellation.check();
       if (!resultSet.next()) break;
       cancellation.check();
-      consumer.row(readRow(resultSet, types, metadata, calendar));
+      consumer.row(readRow(resultSet, types, metadata));
     }
     return CalcitePlanContext.drainWarnings();
   }
 
   private ExprValue readRow(
-      ResultSet resultSet,
-      List<RelDataType> fieldTypes,
-      ResultSetMetaData metadata,
-      Calendar calendar)
+      ResultSet resultSet, List<RelDataType> fieldTypes, ResultSetMetaData metadata)
       throws SQLException {
     Map<String, ExprValue> row = new LinkedHashMap<>();
     for (int i = 1; i <= metadata.getColumnCount(); i++) {
-      Object value =
-          preserveNativeTypes && fieldTypes.get(i - 1).getSqlTypeName() == SqlTypeName.TIMESTAMP
-              ? resultSet.getTimestamp(i, calendar)
-              : resultSet.getObject(i);
+      Object value;
+      if (preserveNativeTypes && fieldTypes.get(i - 1).getSqlTypeName() == SqlTypeName.TIMESTAMP) {
+        // Calcite exposes epoch milliseconds directly. Avatica's getTimestamp(Calendar) first
+        // passes through JVM-local calendar fields, which can shift instants in a DST gap.
+        long millis = resultSet.getLong(i);
+        value = resultSet.wasNull() ? null : Instant.ofEpochMilli(millis);
+      } else {
+        value = resultSet.getObject(i);
+      }
       row.put(
           metadata.getColumnName(i),
           ExprValueUtils.fromObjectValue(processValue(value, fieldTypes.get(i - 1))));

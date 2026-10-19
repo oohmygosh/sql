@@ -41,6 +41,20 @@ public class NativeBackendSemanticsTest {
   }
 
   @Test
+  public void utcTimestampOutputDoesNotPassThroughJvmLocalCalendarFields() {
+    var service = BackendQueryCorpus.referenceService();
+    for (QueryType language : QueryType.values()) {
+      String query =
+          language == QueryType.SQL
+              ? "SELECT TIMESTAMP '2026-03-08 02:30:00' AS ts FROM events LIMIT 1"
+              : "source=events | head 1 | eval ts=timestamp('2026-03-08 02:30:00') | fields ts";
+      var timestamp = service.execute(language, query).getResults().getFirst().keyValue("ts");
+      assertEquals(Instant.parse("2026-03-08T02:30:00Z"), timestamp.timestampValue());
+      assertEquals("2026-03-08 02:30:00", timestamp.value());
+    }
+  }
+
+  @Test
   public void datetimeNormalizationPreservesIntermediateProjectionTypesAndValues() {
     var service = BackendQueryCorpus.referenceService();
     var result =

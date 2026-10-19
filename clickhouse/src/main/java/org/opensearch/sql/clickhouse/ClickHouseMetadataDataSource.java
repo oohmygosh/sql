@@ -11,14 +11,20 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
+import java.sql.Statement;
 import java.sql.Types;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
 import java.util.logging.Logger;
 import javax.sql.DataSource;
+import org.apache.calcite.runtime.SqlFunctions;
 
-/** Adapts ClickHouse JDBC metadata to exact Calcite numeric types and unbounded strings. */
+/** Adapts ClickHouse JDBC metadata and UTC timestamp values to Calcite's type conventions. */
 final class ClickHouseMetadataDataSource implements DataSource {
   private final DataSource delegate;
 
@@ -41,6 +47,7 @@ final class ClickHouseMetadataDataSource implements DataSource {
             new Class<?>[] {Connection.class},
             (proxy, method, args) -> {
               Object result = invoke(connection, method, args);
+              if (result instanceof Statement statement) return wrap(statement);
               if (!method.getName().equals("getMetaData")) return result;
               DatabaseMetaData metadata = (DatabaseMetaData) result;
               return Proxy.newProxyInstance(
@@ -78,6 +85,57 @@ final class ClickHouseMetadataDataSource implements DataSource {
                           return value;
                         });
                   });
+            });
+  }
+
+  private Statement wrap(Statement statement) {
+    Class<? extends Statement> api =
+        statement instanceof PreparedStatement ? PreparedStatement.class : Statement.class;
+    return (Statement)
+        Proxy.newProxyInstance(
+            api.getClassLoader(),
+            new Class<?>[] {api},
+            (proxy, method, args) -> {
+              Object result = invoke(statement, method, args);
+              return result instanceof ResultSet rows ? wrap(rows) : result;
+            });
+  }
+
+  private ResultSet wrap(ResultSet rows) {
+    return (ResultSet)
+        Proxy.newProxyInstance(
+            ResultSet.class.getClassLoader(),
+            new Class<?>[] {ResultSet.class},
+            (proxy, method, args) -> {
+              String getter = method.getName();
+              if ((getter.equals("getLong") || getter.equals("getInt")) && args.length == 1) {
+                int index =
+                    args[0] instanceof Integer number ? number : rows.findColumn((String) args[0]);
+                int type = rows.getMetaData().getColumnType(index);
+                if (getter.equals("getLong")
+                    && (type == Types.TIMESTAMP || type == Types.TIMESTAMP_WITH_TIMEZONE)) {
+                  // getTimestamp() rebuilds column-local calendar fields and loses the offset.
+                  // The typed getter retains the instant, even across a DST overlap. DIRECT
+                  // tells Calcite to consume these epoch milliseconds without another shift.
+                  OffsetDateTime value = rows.getObject(index, OffsetDateTime.class);
+                  return value == null ? 0L : value.toInstant().toEpochMilli();
+                }
+                if (getter.equals("getInt") && type == Types.DATE) {
+                  LocalDate value = rows.getObject(index, LocalDate.class);
+                  return value == null ? 0 : Math.toIntExact(value.toEpochDay());
+                }
+                if (getter.equals("getInt") && type == Types.TIME) {
+                  LocalTime value = rows.getObject(index, LocalTime.class);
+                  return value == null ? 0 : (int) (value.toNanoOfDay() / 1_000_000);
+                }
+              }
+              Object result = invoke(rows, method, args);
+              // DIRECT also bypasses JdbcToEnumerableConverter's usual ARRAY-to-List conversion.
+              return getter.equals("getObject")
+                      && args.length == 1
+                      && result instanceof java.sql.Array array
+                  ? SqlFunctions.arrayToList(array)
+                  : result;
             });
   }
 
